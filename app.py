@@ -21,12 +21,9 @@ import certifi
 # Load environment variables from .env file
 load_dotenv()
 from config import RAPIDAPI_HOST, RAPIDAPI_KEY, RESUME_MATCHER_HOST, RESUME_MATCHER_API_KEY, RESUME_MATCHER_ENDPOINT, SKILLS_PARSER_HOST, SKILLS_PARSER_API_KEY
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
+import secrets
 import PyPDF2
 import docx
-import secrets
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
@@ -55,22 +52,22 @@ if not MONGO_URI:
     print(f"📍 Falling back to local MongoDB: {MONGO_URI}\n")
 
 # Ensure the URI includes the database name if it ends with /
-if 'mongodb+srv://' in MONGO_URI and MONGO_URI.endswith('.net/'):
-    MONGO_URI = MONGO_URI + 'resume_ats'
-elif 'mongodb+srv://' in MONGO_URI and not ('/' in MONGO_URI.split('.net/')[1] if '.net/' in MONGO_URI else False):
-    # Handle cases where .net exists but no DB name follows or session params exist but no DB name
-    if '.net/' in MONGO_URI and MONGO_URI.split('.net/')[1] == '':
+if MONGO_URI and 'mongodb+srv://' in MONGO_URI:
+    if MONGO_URI.endswith('.net/'):
         MONGO_URI = MONGO_URI + 'resume_ats'
-    elif '.net/' in MONGO_URI and MONGO_URI.split('.net/')[1].startswith('?'):
-        parts = MONGO_URI.split('.net/')
-        MONGO_URI = f"{parts[0]}.net/resume_ats{parts[1]}"
+    elif not ('/' in MONGO_URI.split('.net/')[1] if '.net/' in MONGO_URI else False):
+        if '.net/' in MONGO_URI and MONGO_URI.split('.net/')[1].startswith('?'):
+            parts = MONGO_URI.split('.net/')
+            MONGO_URI = f"{parts[0]}.net/resume_ats{parts[1]}"
+        elif '.net/' in MONGO_URI and MONGO_URI.split('.net/')[1] == '':
+             MONGO_URI = MONGO_URI + 'resume_ats'
 
 try:
     # Enhanced connection parameters to resolve SSL issues
     connection_params = {
-        'serverSelectionTimeoutMS': 10000,
-        'connectTimeoutMS': 20000,
-        'socketTimeoutMS': 20000,
+        'serverSelectionTimeoutMS': 5000, # Reduced for faster failure/fallback
+        'connectTimeoutMS': 10000,
+        'socketTimeoutMS': 10000,
         'retryWrites': True,
     }
     
@@ -84,8 +81,7 @@ try:
     
     client = MongoClient(MONGO_URI, **connection_params)
     
-    # Test connection
-    client.admin.command('ping')
+    # Do NOT ping in global scope on Vercel as it can cause timeouts/crashes
     db = client.get_database()
     
     # Collections
@@ -499,6 +495,10 @@ def calculate_match_score(candidate_skills, job_requirements, resume_text='', jd
                 pass
     
     # Fallback to cosine similarity
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    import numpy as np
+    
     candidate_text = ' '.join([str(s).lower() for s in candidate_skills])
     job_text = ' '.join([str(r).lower() for r in job_requirements])
     
@@ -520,6 +520,8 @@ def calculate_text_similarity(text_a, text_b):
     """Calculate similarity between two text blocks"""
     if not text_a or not text_b:
         return 0.0
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
     vectorizer = TfidfVectorizer(stop_words='english')
     try:
         tfidf_matrix = vectorizer.fit_transform([text_a.lower(), text_b.lower()])
