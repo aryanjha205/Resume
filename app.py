@@ -1964,13 +1964,17 @@ def get_stats():
     total_applications = applications_collection.count_documents({})
     companies = jobs_collection.distinct('company')
     
+    # Check if we are connected to a real MongoDB
+    is_connected = db is not None
+    
     return jsonify({
         'success': True,
         'stats': {
             'total_jobs': total_jobs,
             'total_candidates': total_candidates,
             'total_applications': total_applications,
-            'total_companies': len([c for c in companies if c])
+            'total_companies': len([c for c in companies if c]),
+            'database_connected': is_connected
         }
     })
 
