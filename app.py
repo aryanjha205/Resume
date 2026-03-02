@@ -22,12 +22,12 @@ import certifi
 load_dotenv()
 from config import RAPIDAPI_HOST, RAPIDAPI_KEY, RESUME_MATCHER_HOST, RESUME_MATCHER_API_KEY, RESUME_MATCHER_ENDPOINT, SKILLS_PARSER_HOST, SKILLS_PARSER_API_KEY
 import secrets
-import PyPDF2
-import docx
+# Heavy imports moved inside functions to speed up startup on Vercel
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
-app.config['UPLOAD_FOLDER'] = 'uploads'
+# Use /tmp for uploads on Vercel/Serverless as it's the only writable directory
+app.config['UPLOAD_FOLDER'] = os.path.join('/tmp', 'uploads') if os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME') else 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
 
@@ -40,7 +40,10 @@ def serve_manifest():
 def serve_sw():
     return send_from_directory('static', 'sw.js')
 
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+try:
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+except Exception as e:
+    print(f"Warning: Could not create upload directory: {e}")
 
 # MongoDB Configuration
 MONGO_URI = os.getenv('MONGO_URI')
@@ -51,16 +54,19 @@ if not MONGO_URI:
     MONGO_URI = 'mongodb://localhost:27017/resume_ats'
     print(f"📍 Falling back to local MongoDB: {MONGO_URI}\n")
 
-# Ensure the URI includes the database name if it ends with /
+# Ensure the URI includes the database name if it's a root string
 if MONGO_URI and 'mongodb+srv://' in MONGO_URI:
-    if MONGO_URI.endswith('.net/'):
-        MONGO_URI = MONGO_URI + 'resume_ats'
-    elif not ('/' in MONGO_URI.split('.net/')[1] if '.net/' in MONGO_URI else False):
-        if '.net/' in MONGO_URI and MONGO_URI.split('.net/')[1].startswith('?'):
-            parts = MONGO_URI.split('.net/')
-            MONGO_URI = f"{parts[0]}.net/resume_ats{parts[1]}"
-        elif '.net/' in MONGO_URI and MONGO_URI.split('.net/')[1] == '':
-             MONGO_URI = MONGO_URI + 'resume_ats'
+    # A safer way to check and append database name
+    if '.net' in MONGO_URI:
+        parts = MONGO_URI.split('.net')
+        after_net = parts[1] if len(parts) > 1 else ""
+        
+        if not after_net or after_net == '/':
+            MONGO_URI = parts[0] + '.net/resume_ats' + (after_net if after_net == '/' else "")
+        elif after_net.startswith('/?'):
+            MONGO_URI = parts[0] + '.net/resume_ats' + after_net[1:]
+        elif after_net.startswith('?'):
+             MONGO_URI = parts[0] + '.net/resume_ats' + after_net
 
 try:
     # Enhanced connection parameters to resolve SSL issues
@@ -148,6 +154,7 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def extract_text_from_pdf(file_path):
+    import PyPDF2
     text = ""
     try:
         with open(file_path, 'rb') as file:
@@ -159,6 +166,7 @@ def extract_text_from_pdf(file_path):
     return text
 
 def extract_text_from_docx(file_path):
+    import docx
     text = ""
     try:
         doc = docx.Document(file_path)
