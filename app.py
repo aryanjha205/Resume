@@ -16,6 +16,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from difflib import SequenceMatcher
+import certifi
 
 # Load environment variables from .env file
 load_dotenv()
@@ -65,9 +66,10 @@ try:
     }
     
     # Add SSL/TLS parameters only for MongoDB Atlas connections
-    if 'mongodb+srv://' in MONGO_URI or 'mongodb.net' in MONGO_URI:
+    if MONGO_URI and ('mongodb+srv://' in MONGO_URI or 'mongodb.net' in MONGO_URI):
         connection_params.update({
             'tls': True,
+            'tlsCAFile': certifi.where(),
             'tlsAllowInvalidCertificates': True,  # For development - remove in production
         })
     
@@ -1966,6 +1968,7 @@ def get_stats():
     
     # Check if we are connected to a real MongoDB
     is_connected = db is not None
+    mongo_env_set = os.environ.get('MONGO_URI') is not None
     
     return jsonify({
         'success': True,
@@ -1974,7 +1977,8 @@ def get_stats():
             'total_candidates': total_candidates,
             'total_applications': total_applications,
             'total_companies': len([c for c in companies if c]),
-            'database_connected': is_connected
+            'database_connected': is_connected,
+            'mongo_uri_set': mongo_env_set
         }
     })
 

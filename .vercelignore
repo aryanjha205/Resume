@@ -1,0 +1,13 @@
+.venv
+node_modules
+__pycache__
+*.pyc
+uploads/
+.env
+.git
+RENDER_DEPLOYMENT.md
+build.sh
+Procfile
+mailer.js
+package.json
+package-lock.json
