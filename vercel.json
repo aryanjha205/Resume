@@ -12,6 +12,18 @@
             "dest": "/static/$1"
         },
         {
+            "src": "/manifest.json",
+            "dest": "/static/manifest.json"
+        },
+        {
+            "src": "/sw.js",
+            "dest": "/static/sw.js",
+            "headers": {
+                "Service-Worker-Allowed": "/",
+                "Cache-Control": "no-cache, no-store, must-revalidate"
+            }
+        },
+        {
             "src": "/(.*)",
             "dest": "app.py"
         }
