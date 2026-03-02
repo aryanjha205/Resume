@@ -50,18 +50,27 @@ MONGO_URI = os.getenv('MONGO_URI')
 
 if not MONGO_URI:
     print("\n⚠ MongoDB Connection Error: MONGO_URI environment variable not set")
-    print("Please set MONGO_URI environment variable with valid MongoDB connection string")
-    print("Example: export MONGO_URI='mongodb+srv://username:password@cluster.mongodb.net/resume_ats?retryWrites=true&w=majority'")
     # Use local MongoDB as fallback for development
     MONGO_URI = 'mongodb://localhost:27017/resume_ats'
     print(f"📍 Falling back to local MongoDB: {MONGO_URI}\n")
 
+# Ensure the URI includes the database name if it ends with /
+if 'mongodb+srv://' in MONGO_URI and MONGO_URI.endswith('.net/'):
+    MONGO_URI = MONGO_URI + 'resume_ats'
+elif 'mongodb+srv://' in MONGO_URI and not ('/' in MONGO_URI.split('.net/')[1] if '.net/' in MONGO_URI else False):
+    # Handle cases where .net exists but no DB name follows or session params exist but no DB name
+    if '.net/' in MONGO_URI and MONGO_URI.split('.net/')[1] == '':
+        MONGO_URI = MONGO_URI + 'resume_ats'
+    elif '.net/' in MONGO_URI and MONGO_URI.split('.net/')[1].startswith('?'):
+        parts = MONGO_URI.split('.net/')
+        MONGO_URI = f"{parts[0]}.net/resume_ats{parts[1]}"
+
 try:
     # Enhanced connection parameters to resolve SSL issues
     connection_params = {
-        'serverSelectionTimeoutMS': 5000,
-        'connectTimeoutMS': 10000,
-        'socketTimeoutMS': 10000,
+        'serverSelectionTimeoutMS': 10000,
+        'connectTimeoutMS': 20000,
+        'socketTimeoutMS': 20000,
         'retryWrites': True,
     }
     
@@ -70,7 +79,7 @@ try:
         connection_params.update({
             'tls': True,
             'tlsCAFile': certifi.where(),
-            'tlsAllowInvalidCertificates': True,  # For development - remove in production
+            'tlsAllowInvalidCertificates': True,
         })
     
     client = MongoClient(MONGO_URI, **connection_params)
@@ -90,13 +99,7 @@ try:
     
 except Exception as e:
     print(f"\n⚠ MongoDB Connection Error: {str(e)}")
-    print("\nTroubleshooting steps:")
-    print("1. Verify your MongoDB Atlas credentials in .env file")
-    print("2. Check if your IP address is whitelisted in MongoDB Atlas (Network Access)")
-    print("3. Ensure your connection string includes the database name")
-    print("4. Your connection string should look like:")
-    print("   mongodb+srv://username:password@cluster.mongodb.net/resume_ats?retryWrites=true&w=majority&tls=true&tlsAllowInvalidCertificates=true")
-    print("\nFor local development, you can use: mongodb://localhost:27017/resume_ats")
+    print(f"Attempted URI: {MONGO_URI.split(':', 1)[0]}:****@****") # Secure logging
     
     # Try local connection as fallback
     try:
