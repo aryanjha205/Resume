@@ -1,2054 +1,1338 @@
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_from_directory
-from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import secure_filename
-from pymongo import MongoClient
-from bson.objectid import ObjectId
-from datetime import datetime, timedelta
 import os
-import re
-import json
-import requests
-from dotenv import load_dotenv
-import subprocess
-import base64
-import http.client
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from difflib import SequenceMatcher
-import certifi
-
-# Load environment variables from .env file
-load_dotenv()
-from config import RAPIDAPI_HOST, RAPIDAPI_KEY, RESUME_MATCHER_HOST, RESUME_MATCHER_API_KEY, RESUME_MATCHER_ENDPOINT, SKILLS_PARSER_HOST, SKILLS_PARSER_API_KEY
-import secrets
-# Heavy imports moved inside functions to speed up startup on Vercel
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, render_template_string
+from flask_socketio import SocketIO, emit, join_room, leave_room
+from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from flask_bcrypt import Bcrypt
+from flask_mail import Mail, Message
+from models import Database, User
+from config import Config
+import random
+import string
+from bson import ObjectId
+from datetime import datetime, timezone, timedelta
+from werkzeug.utils import secure_filename
+import time
+# Delaying heavy imports to prevent startup crashes on serverless
+# from bot import get_ai_response
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)
-# Use /tmp for uploads on Vercel/Serverless as it's the only writable directory
-app.config['UPLOAD_FOLDER'] = os.path.join('/tmp', 'uploads') if os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME') else 'uploads'
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
+app.config.from_object(Config)
+application = app
 
-# Serve PWA files from root
-@app.route('/manifest.json')
-def serve_manifest():
-    return send_from_directory('static', 'manifest.json')
+# Initialize Extensions
+socketio = SocketIO(app, cors_allowed_origins="*")
+bcrypt = Bcrypt(app)
+mail = Mail(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
 
-@app.route('/sw.js')
-def serve_sw():
-    return send_from_directory('static', 'sw.js')
+# Lazy Database Initialization
+_db_initialized = False
+class ConfigError(Exception):
+    pass
 
-@app.route('/offline')
-def serve_offline():
-    return render_template('offline.html')
-
-try:
-    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-except Exception as e:
-    print(f"Warning: Could not create upload directory: {e}")
-
-# Global error tracking for debugging
-db_connection_error = None
-latest_error = None
-
-# MongoDB Configuration
-MONGO_URI = os.getenv('MONGO_URI')
-
-if not MONGO_URI:
-    print("\n⚠ MongoDB Connection Error: MONGO_URI environment variable not set")
-    # Use local MongoDB as fallback for development
-    MONGO_URI = 'mongodb://localhost:27017/resume_ats'
-    print(f"📍 Falling back to local MongoDB: {MONGO_URI}\n")
-
-# MongoDB URI handling moved to explicit database selection for reliability
-
-try:
-    # Enhanced connection parameters to resolve SSL issues
-    connection_params = {
-        'serverSelectionTimeoutMS': 5000, # Reduced for faster failure/fallback
-        'connectTimeoutMS': 10000,
-        'socketTimeoutMS': 10000,
-        'retryWrites': True,
-    }
-    
-    # Add SSL/TLS parameters only for MongoDB Atlas connections
-    if MONGO_URI and ('mongodb+srv://' in MONGO_URI or 'mongodb.net' in MONGO_URI):
-        # certifi.where() is the most reliable way to get CA certs in serverless
-        connection_params.update({
-            'tls': True,
-            'tlsCAFile': certifi.where(),
-        })
-    
-    client = MongoClient(MONGO_URI, **connection_params)
-    
-    # Explicitly select the database name for consistency across environments
-    db = client.get_database('resume_ats')
-    
-    # Collections
-    users_collection = db.users
-    jobs_collection = db.jobs
-    applications_collection = db.applications
-    assessments_collection = db.assessments
-    notifications_collection = db.notifications
-    
-    print(f"✅ MongoDB Connected Successfully to: {db.name}\n")
-    
-except Exception as e:
-    # Masked URI for safe logging in Vercel
-    masked_uri = "NOT_SET"
-    if MONGO_URI:
+def get_db():
+    global _db_initialized
+    if not _db_initialized:
+        uri = app.config.get('MONGO_URI', '')
+        # Detect Vercel environment issues
+        is_vercel = os.environ.get('VERCEL') or os.environ.get('VERCEL_URL')
+        if is_vercel and ('localhost' in uri or not uri):
+            raise ConfigError("MONGO_URI environment variable is missing in Vercel Settings.")
+            
         try:
-            parts = MONGO_URI.split('@')
-            if len(parts) > 1:
-                masked_uri = "mongodb+srv://****:****@" + parts[1]
+            Database.initialize(uri)
+            _db_initialized = True
+        except Exception as e:
+            # On Vercel, we want to know EXACTLY what's wrong with the connection
+            if is_vercel:
+                raise ConfigError(f"Database Connection Error: {str(e)}")
             else:
-                masked_uri = MONGO_URI[:20] + "..."
-        except:
-            masked_uri = "REDACTED"
-            
-    print(f"\n⚠ MongoDB Connection Fatal Error: {str(e)}")
-    print(f"Attempted URI: {masked_uri}")
-    db_connection_error = str(e)
-    
-    # Try local connection as fallback
+                print(f"DB Error: {e}")
+    return Database.db
+
+@login_manager.user_loader
+def load_user(user_id):
     try:
-        print("\n🔄 Attempting local MongoDB connection...")
-        client = MongoClient('mongodb://localhost:27017/', serverSelectionTimeoutMS=2000)
-        client.admin.command('ping')
-        db = client['resume_ats']
-        
-        # Collections
-        users_collection = db.users
-        jobs_collection = db.jobs
-        applications_collection = db.applications
-        assessments_collection = db.assessments
-        notifications_collection = db.notifications
-        
-        print(f"✅ Connected to local MongoDB: {db.name}\n")
-    except Exception as local_error:
-        print(f"❌ Local MongoDB also unavailable: {str(local_error)}")
-        print("⚠️  Application will run but database operations will fail!\n")
-        
-        # Create mock collections for development
-        class MockCollection:
-            is_mock = True
-            def find_one(self, *args, **kwargs):
-                return None
-            def find(self, *args, **kwargs):
-                return []
-            def insert_one(self, *args, **kwargs):
-                return type('obj', (object,), {'inserted_id': 'mock_id'})()
-            def update_one(self, *args, **kwargs):
-                return type('obj', (object,), {'modified_count': 0})()
-            def count_documents(self, *args, **kwargs):
-                return 0
-            def distinct(self, *args, **kwargs):
-                return []
-        
-        users_collection = MockCollection()
-        jobs_collection = MockCollection()
-        applications_collection = MockCollection()
-        assessments_collection = MockCollection()
-        notifications_collection = MockCollection()
-        db = None
-
-# Hugging Face API Configuration
-HF_API_TOKEN = os.environ.get('HF_API_TOKEN', '')
-HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-
-ALLOWED_EXTENSIONS = {'pdf', 'docx', 'doc'}
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def extract_text_from_pdf(file_path):
-    import PyPDF2
-    text = ""
-    try:
-        with open(file_path, 'rb') as file:
-            pdf_reader = PyPDF2.PdfReader(file)
-            for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
-    except:
-        pass
-    return text
-
-def extract_text_from_docx(file_path):
-    import docx
-    text = ""
-    try:
-        doc = docx.Document(file_path)
-        for para in doc.paragraphs:
-            text += para.text + "\n"
-    except:
-        pass
-    return text
-
-def extract_text_from_resume(file_path):
-    if file_path.endswith('.pdf'):
-        return extract_text_from_pdf(file_path)
-    elif file_path.endswith('.docx') or file_path.endswith('.doc'):
-        return extract_text_from_docx(file_path)
-    return ""
-
-def parse_resume_with_rapidapi(file_path):
-    """
-    Parse resume using RapidAPI AI Resume Parser
-    Supports PDF and DOCX files
-    
-    Returns:
-        dict: Parsed resume data or error information
-    """
-    try:
-        if not RAPIDAPI_KEY:
-            return {
-                'success': False,
-                'error': 'RAPIDAPI_KEY not configured. Please set RAPIDAPI_KEY in .env file'
-            }
-        
-        # Read file and encode to base64
-        with open(file_path, 'rb') as file:
-            file_content = file.read()
-            file_base64 = base64.b64encode(file_content).decode('utf-8')
-        
-        # Determine media type
-        media_type = 'application/pdf' if file_path.endswith('.pdf') else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        
-        # Prepare payload
-        payload = json.dumps({
-            'image_base64': file_base64,
-            'media_type': media_type,
-            'include_raw_text': False
-        })
-        
-        # Make API request
-        conn = http.client.HTTPSConnection(RAPIDAPI_HOST)
-        headers = {
-            'x-rapidapi-key': RAPIDAPI_KEY,
-            'x-rapidapi-host': RAPIDAPI_HOST,
-            'Content-Type': 'application/json'
-        }
-        
-        conn.request('POST', '/parse/base64', payload, headers)
-        response = conn.getresponse()
-        data = response.read()
-        
-        result = json.loads(data.decode('utf-8'))
-        
-        if response.status == 200:
-            return {
-                'success': True,
-                'data': result
-            }
-        else:
-            return {
-                'success': False,
-                'error': result.get('message', 'Failed to parse resume'),
-                'status_code': response.status
-            }
-            
-    except FileNotFoundError:
-        return {
-            'success': False,
-            'error': f'File not found: {file_path}'
-        }
-    except json.JSONDecodeError:
-        return {
-            'success': False,
-            'error': 'Invalid response from API'
-        }
-    except Exception as e:
-        return {
-            'success': False,
-            'error': str(e)
-        }
-    finally:
-        try:
-            conn.close()
-        except:
-            pass
-
-def extract_skills_with_ai(resume_text):
-    """Extract skills using pattern matching and NLP"""
-    skills = set()
-    
-    # Common technical skills patterns
-    tech_skills = [
-        'python', 'java', 'javascript', 'c++', 'c#', 'ruby', 'php', 'swift', 'kotlin', 'go',
-        'react', 'angular', 'vue', 'node.js', 'express', 'django', 'flask', 'spring', 'asp.net',
-        'html', 'css', 'sass', 'bootstrap', 'tailwind', 'jquery',
-        'sql', 'mysql', 'postgresql', 'mongodb', 'redis', 'elasticsearch', 'oracle',
-        'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'jenkins', 'git', 'ci/cd',
-        'machine learning', 'deep learning', 'nlp', 'computer vision', 'tensorflow', 'pytorch', 'scikit-learn',
-        'agile', 'scrum', 'jira', 'confluence', 'rest api', 'graphql', 'microservices',
-        'leadership', 'communication', 'teamwork', 'problem solving', 'project management',
-        'data analysis', 'excel', 'powerbi', 'tableau', 'analytics'
-    ]
-    
-    resume_lower = resume_text.lower()
-    
-    for skill in tech_skills:
-        if skill in resume_lower:
-            skills.add(skill.title())
-    
-    # Extract education
-    education_patterns = [
-        r'b\.?tech', r'b\.?e\.?', r'm\.?tech', r'm\.?s\.?', r'phd', r'mba', r'bba',
-        r'bachelor', r'master', r'computer science', r'engineering', r'information technology'
-    ]
-    
-    for pattern in education_patterns:
-        matches = re.findall(pattern, resume_lower)
-        if matches:
-            skills.add(pattern.replace(r'\.?', '.').upper())
-    
-    # Extract years of experience
-    exp_matches = re.findall(r'(\d+)\+?\s*(?:years?|yrs?)', resume_lower)
-    if exp_matches:
-        skills.add(f"{max(map(int, exp_matches))}+ Years Experience")
-    
-    # Use Hugging Face for additional skill extraction (if available)
-    if HF_API_TOKEN:
-        try:
-            candidate_labels = ['programming', 'databases', 'cloud computing', 'project management', 'leadership']
-            headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
-            payload = {
-                "inputs": resume_text[:1000],
-                "parameters": {"candidate_labels": candidate_labels}
-            }
-            response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=10)
-            if response.status_code == 200:
-                result = response.json()
-                if isinstance(result, dict) and 'labels' in result:
-                    for label, score in zip(result['labels'], result['scores']):
-                        if score > 0.5:
-                            skills.add(label.title())
-        except:
-            pass
-    
-    return list(skills)
-
-def match_resume_with_rapidapi(resume_text, jd_text, top_k_skills=10, expected_years=0):
-    """
-    Match resume with job description using Resume Matcher API
-    Returns match score and top matching skills
-    """
-    try:
-        if not RESUME_MATCHER_API_KEY:
-            return None
-        
-        payload = json.dumps({
-            'matches': [{
-                'resume_text': resume_text[:5000],  # Limit to 5000 chars
-                'jd_text': jd_text[:5000],
-                'top_k_skills': top_k_skills,
-                'expected_years': expected_years,
-                'use_semantic_scoring': True
-            }],
-            'webhook_url': ''
-        })
-        
-        headers = {
-            'x-rapidapi-key': RESUME_MATCHER_API_KEY,
-            'x-rapidapi-host': RESUME_MATCHER_HOST,
-            'Content-Type': 'application/json'
-        }
-        
-        conn = http.client.HTTPSConnection(RESUME_MATCHER_HOST)
-        conn.request('POST', RESUME_MATCHER_ENDPOINT, payload, headers)
-        response = conn.getresponse()
-        data = response.read()
-        
-        result = json.loads(data.decode('utf-8'))
-        
-        if response.status == 200:
-            return {
-                'success': True,
-                'data': result
-            }
-        else:
-            return None
-            
-    except Exception as e:
-        print(f"Resume Matcher API error: {str(e)}")
+        db = get_db()
+        return User.find_by_id(user_id)
+    except Exception:
         return None
-    finally:
-        try:
-            conn.close()
-        except:
-            pass
 
-def parse_skills_from_jd(job_description):
-    """
-    Parse skills from job description using Skills Parser API
-    
-    Args:
-        job_description (str): The job description text to parse
-        
-    Returns:
-        dict: Parsed skills data with success status and skills list
-    """
-    try:
-        if not SKILLS_PARSER_API_KEY:
-            return {
-                'success': False,
-                'error': 'SKILLS_PARSER_API_KEY not configured. Please set SKILLS_PARSER_API_KEY in .env file'
-            }
-        
-        # Prepare payload with job description
-        payload = json.dumps({
-            "job_description": job_description
-        })
-        
-        headers = {
-            'x-rapidapi-key': SKILLS_PARSER_API_KEY,
-            'x-rapidapi-host': SKILLS_PARSER_HOST,
-            'Content-Type': 'application/json'
-        }
-        
-        # Make API request
-        conn = http.client.HTTPSConnection(SKILLS_PARSER_HOST)
-        conn.request("POST", "/parse_skills", payload, headers)
-        
-        res = conn.getresponse()
-        data = res.read()
-        
-        result = json.loads(data.decode("utf-8"))
-        
-        if res.status == 200:
-            return {
-                'success': True,
-                'data': result
-            }
-        else:
-            return {
-                'success': False,
-                'error': result.get('message', 'Failed to parse skills from job description'),
-                'status_code': res.status
-            }
-            
-    except json.JSONDecodeError:
-        return {
-            'success': False,
-            'error': 'Invalid response from API'
-        }
-    except Exception as e:
-        return {
-            'success': False,
-            'error': str(e)
-        }
-    finally:
-        try:
-            conn.close()
-        except:
-            pass
-
-def extract_skills_from_job_description(job_description):
-    """
-    Extract skills from job description using pattern matching (fallback method)
-    
-    Args:
-        job_description (str): The job description text
-        
-    Returns:
-        list: Extracted skills
-    """
-    if not job_description:
-        return []
-    
-    skills = set()
-    jd_lower = job_description.lower()
-    
-    # Common technical skills and keywords
-    tech_skills_keywords = {
-        'programming': ['python', 'java', 'javascript', 'c++', 'c#', 'ruby', 'php', 'swift', 'kotlin', 'go', 'rust', 'r', 'scala', 'perl'],
-        'web': ['react', 'angular', 'vue', 'node.js', 'express', 'django', 'flask', 'spring', 'asp.net', 'laravel', 'rails'],
-        'frontend': ['html', 'css', 'sass', 'bootstrap', 'tailwind', 'jquery', 'typescript'],
-        'backend': ['rest api', 'graphql', 'microservices', 'websocket', 'grpc'],
-        'databases': ['sql', 'mysql', 'postgresql', 'mongodb', 'redis', 'elasticsearch', 'oracle', 'cassandra', 'dynamodb'],
-        'cloud': ['aws', 'azure', 'gcp', 'google cloud', 'heroku', 'docker', 'kubernetes', 'ci/cd', 'jenkins', 'gitlab'],
-        'ml_ai': ['machine learning', 'deep learning', 'nlp', 'computer vision', 'tensorflow', 'pytorch', 'scikit-learn', 'ai', 'artificial intelligence'],
-        'soft': ['agile', 'scrum', 'jira', 'confluence', 'leadership', 'communication', 'teamwork', 'problem solving'],
-        'data': ['data analysis', 'excel', 'power bi', 'tableau', 'analytics', 'powerbi', 'pandas', 'numpy', 'matplotlib'],
-        'devops': ['git', 'linux', 'unix', 'devops', 'terraform', 'ansible', 'jenkins', 'docker', 'kubernetes'],
-    }
-    
-    # Check for skills
-    for category, skill_list in tech_skills_keywords.items():
-        for skill in skill_list:
-            if skill in jd_lower:
-                skills.add(skill.title())
-    
-    # Extract years of experience requirement
-    exp_matches = re.findall(r'(\d+)\+?\s*(?:years?|yrs?)\s+(?:of\s+)?(?:experience|exp)', jd_lower)
-    if exp_matches:
-        skills.add(f"{exp_matches[0]}+ Years Experience")
-    
-    # Extract education requirements
-    education_keywords = ['b.tech', 'b.e.', 'm.tech', 'm.s.', 'phd', 'mba', 'bba', 'bachelor', 'master']
-    for edu in education_keywords:
-        if edu in jd_lower:
-            skills.add(edu.upper())
-    
-    return list(skills)
-
-def calculate_match_score(candidate_skills, job_requirements, resume_text='', jd_text=''):
-    """Calculate match score using Resume Matcher API or fallback to cosine similarity"""
-    if not candidate_skills or not job_requirements:
-        return 0.0
-    
-    # Try Resume Matcher API first if we have resume and JD text
-    if resume_text and jd_text:
-        api_result = match_resume_with_rapidapi(resume_text, jd_text)
-        if api_result and api_result.get('success'):
-            try:
-                matches = api_result.get('data', {}).get('matches', [])
-                if matches and isinstance(matches, list) and len(matches) > 0:
-                    match_data = matches[0]
-                    if 'match_score' in match_data:
-                        return float(match_data['match_score']) * 100
-            except:
-                pass
-    
-    # Fallback to cosine similarity
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics.pairwise import cosine_similarity
-    import numpy as np
-    
-    candidate_text = ' '.join([str(s).lower() for s in candidate_skills])
-    job_text = ' '.join([str(r).lower() for r in job_requirements])
-    
-    vectorizer = TfidfVectorizer()
-    try:
-        tfidf_matrix = vectorizer.fit_transform([candidate_text, job_text])
-        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])
-        return float(similarity[0][0] * 100)
-    except:
-        # Fallback to simple matching
-        candidate_set = set(candidate_text.split())
-        job_set = set(job_text.split())
-        if not job_set:
-            return 0.0
-        matches = len(candidate_set.intersection(job_set))
-        return (matches / len(job_set)) * 100
-
-def calculate_text_similarity(text_a, text_b):
-    """Calculate similarity between two text blocks"""
-    if not text_a or not text_b:
-        return 0.0
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics.pairwise import cosine_similarity
-    vectorizer = TfidfVectorizer(stop_words='english')
-    try:
-        tfidf_matrix = vectorizer.fit_transform([text_a.lower(), text_b.lower()])
-        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])
-        return float(similarity[0][0] * 100)
-    except:
-        return 0.0
-
-def extract_years_experience(resume_text):
-    """Extract max years of experience from resume text"""
-    if not resume_text:
-        return 0
-    matches = re.findall(r'(\d+(?:\.\d+)?)\+?\s*(?:years?|yrs?)', resume_text.lower())
-    if not matches:
-        return 0
-    try:
-        return int(max(float(m) for m in matches))
-    except:
-        return 0
-
-def normalize_skill_for_matching(skill):
-    """
-    Normalize a skill string for robust matching
-    Handles: case, whitespace, punctuation, version numbers, abbreviations
-    """
-    if not skill:
-        return ""
-    
-    # Convert to lowercase and strip
-    s = str(skill).lower().strip()
-    
-    # Expand common abbreviations
-    abbreviation_map = {
-        'js': 'javascript',
-        'ts': 'typescript',
-        'py': 'python',
-        'cpp': 'c++',
-        'csharp': 'c#',
-        'c#': 'c#',
-        'db': 'database',
-        'ml': 'machine learning',
-        'ai': 'artificial intelligence',
-        'nlp': 'natural language processing',
-        'cv': 'computer vision',
-        'rest api': 'rest',
-        'api': 'rest',
-        'nosql': 'nosql',
-        'sql': 'sql',
-        'html': 'html',
-        'css': 'css',
-        'k8s': 'kubernetes',
-        'k8': 'kubernetes',
-    }
-    
-    # Check if it matches an abbreviation
-    for abbr, expanded in abbreviation_map.items():
-        if s == abbr or s.startswith(abbr + ' ') or s.endswith(' ' + abbr):
-            s = s.replace(abbr, expanded)
-    
-    # Normalize dots and hyphens
-    s = s.replace('.', ' ').replace('-', ' ')
-    
-    # Remove version numbers
-    s = re.sub(r'\s*[\d.]+[a-z]?\+?\s*', ' ', s)
-    
-    # Remove special characters except space
-    s = re.sub(r'[^\w\s+#]', '', s)
-    
-    # Normalize whitespace
-    s = re.sub(r'\s+', ' ', s).strip()
-    
-    return s
-
-def calculate_skills_percentage(job_skills, resume_skills):
-    """
-    Calculate the percentage of job required skills present in resume using robust matching
-    
-    Args:
-        job_skills (list): List of skills required in the job posting
-        resume_skills (list): List of skills extracted from the resume
-        
-    Returns:
-        dict: Contains percentage match, matched skills, missing skills, and details
-    """
-    if not job_skills:
-        return {
-            'percentage': 100.0,
-            'matched_count': 0,
-            'total_skills': 0,
-            'matched_skills': [],
-            'missing_skills': [],
-            'match_details': 'No skills required'
-        }
-    
-    if not resume_skills:
-        return {
-            'percentage': 0.0,
-            'matched_count': 0,
-            'total_skills': len(job_skills),
-            'matched_skills': [],
-            'missing_skills': [str(s) for s in job_skills],
-            'match_details': f'No skills found in resume. Required: {", ".join(str(s) for s in job_skills)}'
-        }
-    
-    # Normalize all skills
-    job_skills_normalized = [normalize_skill_for_matching(skill) for skill in job_skills]
-    resume_skills_normalized = [normalize_skill_for_matching(skill) for skill in resume_skills]
-    
-    # Remove empty entries
-    job_skills_normalized = [s for s in job_skills_normalized if s]
-    resume_skills_normalized = [s for s in resume_skills_normalized if s]
-    
-    matched_skills = []
-    missing_skills = []
-    
-    # Check each job skill against resume skills
-    for i, job_skill in enumerate(job_skills_normalized):
-        skill_found = False
-        original_skill = str(job_skills[i])  # Keep original for display
-        
-        # Exact match
-        if job_skill in resume_skills_normalized:
-            matched_skills.append(original_skill)
-            skill_found = True
-        else:
-            # Fuzzy matching with similarity
-            for resume_skill in resume_skills_normalized:
-                similarity = SequenceMatcher(None, job_skill, resume_skill).ratio()
-                
-                # Match if high similarity or substring
-                if similarity >= 0.75 or (len(job_skill) > 3 and job_skill in resume_skill) or (len(resume_skill) > 3 and resume_skill in job_skill):
-                    matched_skills.append(original_skill)
-                    skill_found = True
-                    break
-        
-        if not skill_found:
-            missing_skills.append(original_skill)
-    
-    # Calculate percentage
-    matched_count = len(matched_skills)
-    total_skills = len(job_skills_normalized)
-    percentage = (matched_count / total_skills * 100) if total_skills > 0 else 0.0
-    
-    # Categorize percentage
-    if percentage >= 80:
-        match_category = "Excellent"
-    elif percentage >= 60:
-        match_category = "Good"
-    elif percentage >= 40:
-        match_category = "Fair"
-    elif percentage >= 20:
-        match_category = "Poor"
-    else:
-        match_category = "Critical Gap"
-    
-    return {
-        'percentage': round(percentage, 2),
-        'matched_count': matched_count,
-        'total_skills': total_skills,
-        'matched_skills': matched_skills,
-        'missing_skills': missing_skills,
-        'match_category': match_category,
-        'match_details': f'{matched_count} of {total_skills} skills matched ({match_category}). Missing: {", ".join(missing_skills) if missing_skills else "None"}'
-    }
-
-
-
-
-def parse_required_experience(experience_text):
-    """Parse required experience from job criteria"""
-    if not experience_text:
-        return 0
-    lowered = experience_text.lower()
-    if 'fresher' in lowered or 'no experience' in lowered:
-        return 0
-    matches = re.findall(r'(\d+(?:\.\d+)?)', lowered)
-    if not matches:
-        return 0
-    try:
-        return int(max(float(m) for m in matches))
-    except:
-        return 0
-
-def extract_education_level(resume_text):
-    """Estimate highest education level from resume text"""
-    if not resume_text:
-        return 0
-    text = resume_text.lower()
-    levels = {
-        'phd': 5,
-        'doctorate': 5,
-        'm.tech': 4,
-        'mtech': 4,
-        'm.s': 4,
-        'ms': 4,
-        'mba': 4,
-        'master': 4,
-        'b.tech': 3,
-        'btech': 3,
-        'b.e': 3,
-        'be': 3,
-        'b.sc': 3,
-        'bsc': 3,
-        'bachelor': 3,
-        'associate': 2,
-        'diploma': 2,
-        'high school': 1,
-        'secondary': 1
-    }
-    detected = 0
-    for key, level in levels.items():
-        if key in text:
-            detected = max(detected, level)
-    return detected
-
-def parse_required_education(education_text):
-    """Parse required education level from job criteria"""
-    if not education_text:
-        return 0
-    return extract_education_level(education_text)
-
-def send_email(to_email, subject, message, html_message=None):
-    """Send email using Python's smtplib"""
-    if not to_email:
-        return False, 'Missing recipient email'
-    
-    user = os.getenv('EMAIL_USER')
-    password = os.getenv('EMAIL_PASS')
-    from_email = os.getenv('EMAIL_FROM') or user
-    
-    if not user or not password:
-        return False, 'EMAIL_USER or EMAIL_PASS not configured'
-        
-    try:
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = subject
-        msg['From'] = from_email
-        msg['To'] = to_email
-        
-        # Attach plain text
-        msg.attach(MIMEText(message, 'plain'))
-        
-        # Attach HTML content if provided
-        if html_message:
-            msg.attach(MIMEText(html_message, 'html'))
-            
-        # Gmail SMTP server configuration
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(user, password)
-        server.send_message(msg)
-        server.quit()
-        
-        return True, None
-    except Exception as e:
-        return False, str(e)
-
-# Alias for backward compatibility if needed, but safer to use the new Python version
-def send_email_via_nodemailer(to_email, subject, message, html_message=None):
-    return send_email(to_email, subject, message, html_message)
-
-def generate_professional_email(candidate_name, job_title, company, status):
-    """Generate professional HTML email with job details"""
-    templates = {
-        'shortlisted': {
-            'subject': f'Congratulations! You Have Been Shortlisted for {job_title}',
-            'text': f'''Dear {candidate_name},
-
-Congratulations! 🎉
-
-We are pleased to inform you that your application for the position of {job_title} at {company} has been shortlisted for the next round.
-
-Our recruitment team will contact you soon with further details regarding the next steps in the selection process.
-
-Thank you for your interest in joining {company}.
-
-Best regards,
-Recruitment Team
-{company}''',
-            'html': f'''<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-        .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }}
-        .content {{ background: #f9f9f9; padding: 30px; border: 1px solid #ddd; }}
-        .highlight {{ background: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 20px 0; }}
-        .footer {{ background: #333; color: white; padding: 20px; text-align: center; border-radius: 0 0 8px 8px; font-size: 12px; }}
-        h1 {{ margin: 0; font-size: 24px; }}
-        .emoji {{ font-size: 40px; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="emoji">🎉</div>
-            <h1>Congratulations!</h1>
-        </div>
-        <div class="content">
-            <p>Dear <strong>{candidate_name}</strong>,</p>
-            <p>We are pleased to inform you that your application for the position of <strong>{job_title}</strong> at <strong>{company}</strong> has been <strong>shortlisted</strong> for the next round.</p>
-            <div class="highlight">
-                <strong>Position:</strong> {job_title}<br>
-                <strong>Company:</strong> {company}<br>
-                <strong>Status:</strong> Shortlisted ✅
+# --- Vercel Diagnostic Tool ---
+@app.errorhandler(ConfigError)
+def handle_config_error(e):
+    return render_template_string("""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8"><title>VAANI - Setup Required</title>
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+            <style>
+                body { background: #0f172a; color: white; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Outfit', sans-serif; }
+                .card { background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(10px); border-radius: 20px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
+                .code { background: #000; color: #10b981; padding: 15px; border-radius: 10px; font-family: monospace; white-space: pre-wrap; word-break: break-all; }
+                .btn-vercel { background: white; color: black; font-weight: bold; border-radius: 50px; }
+            </style>
+        </head>
+        <body>
+            <div class="container" style="max-width: 600px;">
+                <div class="card p-5 text-center">
+                    <h2 class="mb-4">🚀 Almost There!</h2>
+                    <p class="text-muted mb-4 text-start">VAANI is deployed, but it can't find your <strong>MongoDB Atlas Cluster</strong>. Vercel needs you to add an Environment Variable.</p>
+                    <div class="alert alert-danger text-start"><strong>Error:</strong> {{ error_msg }}</div>
+                    
+                    <h5 class="text-start mt-4 mb-3">Fix it in 3 steps:</h5>
+                    <ol class="text-start mb-4">
+                        <li>Go to <strong>Vercel Dashboard</strong> > <strong>Settings</strong> > <strong>Environment Variables</strong>.</li>
+                        <li>Add Key: <code>MONGO_URI</code></li>
+                        <li>Add Value: <small>(Paste your connection string from MongoDB Atlas)</small></li>
+                    </ol>
+                    <div class="d-grid gap-2">
+                        <a href="https://vercel.com/dashboard" target="_blank" class="btn btn-vercel btn-lg">Open Vercel Dashboard</a>
+                        <button onclick="location.reload()" class="btn btn-outline-light rounded-pill">I've added it, Refresh!</button>
+                    </div>
+                </div>
             </div>
-            <p>Our recruitment team will contact you soon with further details regarding the next steps in the selection process.</p>
-            <p>Thank you for your interest in joining {company}. We look forward to speaking with you!</p>
-        </div>
-        <div class="footer">
-            <p>Best regards,<br><strong>Recruitment Team</strong><br>{company}</p>
-        </div>
-    </div>
-</body>
-</html>'''
-        },
-        'rejected': {
-            'subject': f'Application Status Update - {job_title} at {company}',
-            'text': f'''Dear {candidate_name},
+        </body>
+        </html>
+    """, error_msg=str(e)), 500
 
-Thank you for your interest in the {job_title} position at {company} and for taking the time to apply.
+@app.errorhandler(Exception)
+def handle_exception(e):
+    import traceback
+    return f"<h1>Internal Error (Diagnostics)</h1><p>A server error occurred. Please screenshot this and send it back to the assistant:</p><pre style='background:#f4f4f4;padding:15px;color:red;'>{traceback.format_exc()}</pre>", 500
 
-After careful consideration of all applications, we regret to inform you that we will not be moving forward with your application at this time.
+@app.before_request
+def ensure_db():
+    try:
+        get_db()
+    except ConfigError as e:
+        return handle_config_error(e)
 
-We received many strong applications, and the decision was difficult. We encourage you to apply for other positions at {company} that match your skills and experience.
-
-We wish you the best in your job search and future career endeavors.
-
-Best wishes,
-Recruitment Team
-{company}''',
-            'html': f'''<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-        .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }}
-        .content {{ background: #f9f9f9; padding: 30px; border: 1px solid #ddd; }}
-        .highlight {{ background: #fff3e0; border-left: 4px solid #ff9800; padding: 15px; margin: 20px 0; }}
-        .footer {{ background: #333; color: white; padding: 20px; text-align: center; border-radius: 0 0 8px 8px; font-size: 12px; }}
-        h1 {{ margin: 0; font-size: 24px; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>Application Status Update</h1>
-        </div>
-        <div class="content">
-            <p>Dear <strong>{candidate_name}</strong>,</p>
-            <p>Thank you for your interest in the <strong>{job_title}</strong> position at <strong>{company}</strong> and for taking the time to apply.</p>
-            <div class="highlight">
-                <strong>Position:</strong> {job_title}<br>
-                <strong>Company:</strong> {company}<br>
-                <strong>Status:</strong> Not Shortlisted
-            </div>
-            <p>After careful consideration of all applications, we regret to inform you that we will not be moving forward with your application at this time.</p>
-            <p>We received many strong applications, and the decision was difficult. We encourage you to apply for other positions at {company} that match your skills and experience.</p>
-            <p>We wish you the best in your job search and future career endeavors.</p>
-        </div>
-        <div class="footer">
-            <p>Best wishes,<br><strong>Recruitment Team</strong><br>{company}</p>
-        </div>
-    </div>
-</body>
-</html>'''
-        },
-        'hired': {
-            'subject': f'Congratulations! Job Offer - {job_title} at {company}',
-            'text': f'''Dear {candidate_name},
-
-Congratulations! 🎉🎊
-
-We are thrilled to inform you that you have been selected for the position of {job_title} at {company}!
-
-Your skills, experience, and performance throughout the selection process have impressed us, and we believe you will be a valuable addition to our team.
-
-Our HR team will contact you within the next 2-3 business days with:
-• Formal offer letter
-• Compensation details
-• Joining date and onboarding information
-• Required documentation
-
-We are excited to welcome you to {company}!
-
-Warm regards,
-Recruitment Team
-{company}''',
-            'html': f'''<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-        .header {{ background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }}
-        .content {{ background: #f9f9f9; padding: 30px; border: 1px solid #ddd; }}
-        .highlight {{ background: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 20px 0; }}
-        .footer {{ background: #333; color: white; padding: 20px; text-align: center; border-radius: 0 0 8px 8px; font-size: 12px; }}
-        .emoji {{ font-size: 50px; }}
-        h1 {{ margin: 0; font-size: 28px; }}
-        ul {{ text-align: left; margin: 15px 0; }}
-        li {{ margin: 8px 0; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="emoji">🎉🎊</div>
-            <h1>Congratulations!</h1>
-            <p style="margin-top: 10px; font-size: 18px;">You're Hired!</p>
-        </div>
-        <div class="content">
-            <p>Dear <strong>{candidate_name}</strong>,</p>
-            <p>We are thrilled to inform you that you have been <strong>selected</strong> for the position of <strong>{job_title}</strong> at <strong>{company}</strong>!</p>
-            <div class="highlight">
-                <strong>Position:</strong> {job_title}<br>
-                <strong>Company:</strong> {company}<br>
-                <strong>Status:</strong> HIRED ✅
-            </div>
-            <p>Your skills, experience, and performance throughout the selection process have impressed us, and we believe you will be a valuable addition to our team.</p>
-            <p><strong>Next Steps:</strong></p>
-            <p>Our HR team will contact you within the next 2-3 business days with:</p>
-            <ul>
-                <li>Formal offer letter</li>
-                <li>Compensation details</li>
-                <li>Joining date and onboarding information</li>
-                <li>Required documentation</li>
-            </ul>
-            <p>We are excited to welcome you to {company}!</p>
-        </div>
-        <div class="footer">
-            <p>Warm regards,<br><strong>Recruitment Team</strong><br>{company}</p>
-        </div>
-    </div>
-</body>
-</html>'''
-        },
-        'selected': {
-            'subject': f'Congratulations! You Have Been Selected for {job_title}',
-            'text': f'''Dear {candidate_name},
-
-Congratulations! 🎉
-
-We are pleased to inform you that you have been selected for the position of {job_title} at {company}!
-
-Your application and assessment results were impressive. Our recruitment team will contact you soon with the next steps.
-
-Thank you for your interest in joining {company}.
-
-Best regards,
-Recruitment Team
-{company}''',
-            'html': f'''<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-        .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }}
-        .content {{ background: #f9f9f9; padding: 30px; border: 1px solid #ddd; }}
-        .highlight {{ background: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 20px 0; }}
-        .footer {{ background: #333; color: white; padding: 20px; text-align: center; border-radius: 0 0 8px 8px; font-size: 12px; }}
-        h1 {{ margin: 0; font-size: 24px; }}
-        .emoji {{ font-size: 40px; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="emoji">🎉</div>
-            <h1>Congratulations!</h1>
-        </div>
-        <div class="content">
-            <p>Dear <strong>{candidate_name}</strong>,</p>
-            <p>We are pleased to inform you that you have been <strong>selected</strong> for the position of <strong>{job_title}</strong> at <strong>{company}</strong>!</p>
-            <div class="highlight">
-                <strong>Position:</strong> {job_title}<br>
-                <strong>Company:</strong> {company}<br>
-                <strong>Status:</strong> Selected ✅
-            </div>
-            <p>Your application and assessment results were impressive. Our recruitment team will contact you soon with the next steps.</p>
-            <p>Thank you for your interest in joining {company}.</p>
-        </div>
-        <div class="footer">
-            <p>Best regards,<br><strong>Recruitment Team</strong><br>{company}</p>
-        </div>
-    </div>
-</body>
-</html>'''
-        }
-    }
-    
-    return templates.get(status, templates['shortlisted'])
-
-def generate_assessment_questions(job_title, required_skills):
-    """Generate 15 MCQ questions based on job requirements"""
-    questions = []
-    
-    # Predefined question templates for common skills
-    question_templates = {
-        'python': [
-            {
-                'question': 'What is the output of: print(type([]) is list)?',
-                'options': ['True', 'False', 'Error', 'None'],
-                'correct': 0
-            },
-            {
-                'question': 'Which keyword is used to define a function in Python?',
-                'options': ['function', 'def', 'func', 'define'],
-                'correct': 1
-            },
-            {
-                'question': 'What does the len() function return for a dictionary?',
-                'options': ['Number of values', 'Number of keys', 'Total items', 'Size in bytes'],
-                'correct': 1
-            }
-        ],
-        'javascript': [
-            {
-                'question': 'What does "use strict" do in JavaScript?',
-                'options': ['Enables strict mode', 'Imports a library', 'Defines a constant', 'Creates a class'],
-                'correct': 0
-            },
-            {
-                'question': 'Which method adds an element to the end of an array?',
-                'options': ['append()', 'push()', 'add()', 'insert()'],
-                'correct': 1
-            }
-        ],
-        'sql': [
-            {
-                'question': 'Which SQL clause is used to filter records?',
-                'options': ['FILTER', 'WHERE', 'HAVING', 'SELECT'],
-                'correct': 1
-            },
-            {
-                'question': 'What does INNER JOIN return?',
-                'options': ['All records', 'Matching records from both tables', 'Left table records', 'Right table records'],
-                'correct': 1
-            }
-        ],
-        'react': [
-            {
-                'question': 'What is JSX in React?',
-                'options': ['JavaScript XML', 'Java Syntax Extension', 'JSON Extension', 'JavaScript Extra'],
-                'correct': 0
-            },
-            {
-                'question': 'Which hook is used for side effects in React?',
-                'options': ['useState', 'useEffect', 'useContext', 'useReducer'],
-                'correct': 1
-            }
-        ],
-        'default': [
-            {
-                'question': 'What is the time complexity of Binary Search?',
-                'options': ['O(n)', 'O(log n)', 'O(n log n)', 'O(1)'],
-                'correct': 1
-            },
-            {
-                'question': 'Which data structure works on FIFO principle?',
-                'options': ['Stack', 'Queue', 'Tree', 'Graph'],
-                'correct': 1
-            },
-            {
-                'question': 'Which of the following is NOT a Java primitive data type?',
-                'options': ['int', 'float', 'String', 'char'],
-                'correct': 2
-            },
-            {
-                'question': 'What is the default value of boolean in Java?',
-                'options': ['true', 'false', '0', 'null'],
-                'correct': 1
-            },
-            {
-                'question': 'Which sorting algorithm has best average time complexity?',
-                'options': ['Bubble Sort', 'Selection Sort', 'Merge Sort', 'Insertion Sort'],
-                'correct': 2
-            },
-            {
-                'question': 'What is normalization in DBMS?',
-                'options': ['Deleting data', 'Organizing data to reduce redundancy', 'Creating backup', 'Encrypting database'],
-                'correct': 1
-            },
-            {
-                'question': 'Which SQL command is used to remove a table?',
-                'options': ['DELETE', 'REMOVE', 'DROP', 'TRUNCATE'],
-                'correct': 2
-            },
-            {
-                'question': 'What is the full form of JVM?',
-                'options': ['Java Variable Machine', 'Java Virtual Machine', 'Java Verified Machine', 'Joint Virtual Machine'],
-                'correct': 1
-            },
-            {
-                'question': 'Which data structure is used in recursion?',
-                'options': ['Queue', 'Stack', 'Array', 'Tree'],
-                'correct': 1
-            },
-            {
-                'question': 'What is the worst-case time complexity of Quick Sort?',
-                'options': ['O(n log n)', 'O(log n)', 'O(n²)', 'O(n)'],
-                'correct': 2
-            },
-            {
-                'question': 'Which protocol is used to transfer web pages?',
-                'options': ['FTP', 'HTTP', 'SMTP', 'TCP'],
-                'correct': 1
-            },
-            {
-                'question': 'What is the primary key in DBMS?',
-                'options': ['Duplicate key', 'Unique identifier for each record', 'Foreign key', 'Normal key'],
-                'correct': 1
-            },
-            {
-                'question': 'Which of the following is not an OOP principle?',
-                'options': ['Encapsulation', 'Abstraction', 'Compilation', 'Polymorphism'],
-                'correct': 2
-            },
-            {
-                'question': 'What does RAM stand for?',
-                'options': ['Read Access Memory', 'Random Access Memory', 'Run Access Memory', 'Rapid Access Memory'],
-                'correct': 1
-            },
-            {
-                'question': 'Which traversal technique uses Queue?',
-                'options': ['DFS', 'BFS', 'Inorder', 'Postorder'],
-                'correct': 1
-            }
-        ]
-    }
-    
-    # Collect questions based on required skills
-    for skill in required_skills:
-        skill_lower = skill.lower()
-        for key in question_templates:
-            if key in skill_lower:
-                questions.extend(question_templates[key])
-                break
-    
-    # Add default questions to reach 15
-    questions.extend(question_templates['default'])
-    
-    # Ensure we have exactly 15 questions
-    if len(questions) > 15:
-        questions = questions[:15]
-    elif len(questions) < 15:
-        # Duplicate some questions if needed
-        while len(questions) < 15:
-            questions.append(question_templates['default'][len(questions) % len(question_templates['default'])])
-    
-    # Add question numbers
-    for i, q in enumerate(questions):
-        q['id'] = i + 1
-    
-    return questions
-
-def create_notification(user_id, message, notification_type='info'):
-    """Create a notification for a user"""
-    notification = {
-        'user_id': str(user_id),
-        'message': message,
-        'type': notification_type,
-        'read': False,
-        'created_at': datetime.utcnow()
-    }
-    notifications_collection.insert_one(notification)
+# --- Routes ---
 
 @app.route('/')
 def index():
+    try:
+        if current_user and current_user.is_authenticated:
+            return redirect(url_for('chat'))
+    except Exception:
+        pass
     return render_template('index.html')
 
-@app.route('/api/register', methods=['POST'])
-def register():
-    data = request.json
-    
-    email = data.get('email', '').lower().strip()
-    password = data.get('password', '')
-    name = data.get('name', '').strip()
-    role = data.get('role', 'candidate')
-    
-    if not email or not password or not name:
-        return jsonify({'success': False, 'message': 'All fields are required'}), 400
-    
-    try:
-        # Check if email exists - this is where it might fail if DB is down
-        if users_collection.find_one({'email': email}):
-            return jsonify({'success': False, 'message': 'Email already registered. Please login instead.'}), 400
+@app.route('/health')
+def health():
+    db_status = "Connected" if Database.db is not None else "Disconnected"
+    return jsonify({
+        "status": "healthy",
+        "database": db_status,
+        "environment": "vercel" if os.environ.get('VERCEL') else "unknown"
+    })
+
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        email = request.form.get('email')
+        password = request.form.get('password')
         
-        user = {
+        if Database.db.users.find_one({'username': username}):
+            flash('Username already exists', 'danger')
+            return redirect(url_for('signup'))
+        if Database.db.users.find_one({'email': email}):
+            flash('Email already registered', 'danger')
+            return redirect(url_for('signup'))
+        
+        # Generate OTP
+        otp = ''.join(random.choices(string.digits, k=6))
+        
+        # Store temporary user data in session or a temp collection
+        temp_user = {
+            'username': username,
             'email': email,
-            'password': generate_password_hash(password),
-            'name': name,
-            'role': role,
-            'created_at': datetime.utcnow()
+            'password': bcrypt.generate_password_hash(password).decode('utf-8'),
+            'otp': otp,
+            'timestamp': datetime.now(timezone.utc)
         }
+        Database.db.temp_users.update_one({'email': email}, {'$set': temp_user}, upsert=True)
         
-        if role == 'candidate':
-            user['skills'] = []
-            user['resume_path'] = None
-        
-        result = users_collection.insert_one(user)
-        
-        session['user_id'] = str(result.inserted_id)
-        session['user_role'] = role
-        session['user_name'] = name
-        session.permanent = True
-        
-        return jsonify({
-            'success': True,
-            'message': 'Registration successful',
-            'user': {
-                'id': str(result.inserted_id),
-                'name': name,
-                'email': email,
-                'role': role
-            }
-        })
-    except Exception as e:
-        error_msg = str(e)
-        print(f"Registration error: {error_msg}")
-        # Provide a more helpful error for common Atlas issues
-        if "Authentication failed" in error_msg:
-            friendly_msg = "Database authentication failed. Please check your username and password."
-        elif "timeout" in error_msg.lower():
-            friendly_msg = "Database connection timed out. Please check your Network Access (IP whitelist) in Atlas."
-        else:
-            friendly_msg = f"Database error: {error_msg}"
-        return jsonify({'success': False, 'message': friendly_msg}), 500
-
-@app.route('/api/login', methods=['POST'])
-def login():
-    data = request.json
-    
-    email = data.get('email', '').lower().strip()
-    password = data.get('password', '')
-    
-    if not email or not password:
-        return jsonify({'success': False, 'message': 'Email and password required'}), 400
-    
-    try:
-        user = users_collection.find_one({'email': email})
-        
-        if not user:
-            return jsonify({'success': False, 'message': 'No account found with this email. Please register first.'}), 401
-        
-        if not check_password_hash(user['password'], password):
-            return jsonify({'success': False, 'message': 'Incorrect password. Please try again.'}), 401
-        
-        session['user_id'] = str(user['_id'])
-        session['user_role'] = user['role']
-        session['user_name'] = user['name']
-        session.permanent = True
-        
-        return jsonify({
-            'success': True,
-            'message': 'Login successful',
-            'user': {
-                'id': str(user['_id']),
-                'name': user['name'],
-                'email': user['email'],
-                'role': user['role']
-            }
-        })
-    except Exception as e:
-        error_msg = str(e)
-        print(f"Login error: {error_msg}")
-        if "Authentication failed" in error_msg:
-            friendly_msg = "Database authentication failed. Please check your username and password."
-        elif "timeout" in error_msg.lower():
-            friendly_msg = "Database connection timed out. Please check your Network Access (IP whitelist) in Atlas."
-        else:
-            friendly_msg = f"Database error: {error_msg}"
-        return jsonify({'success': False, 'message': friendly_msg}), 500
-
-@app.route('/api/logout', methods=['POST'])
-def logout():
-    session.clear()
-    return jsonify({'success': True, 'message': 'Logged out successfully'})
-
-@app.route('/api/check-auth', methods=['GET'])
-def check_auth():
-    if 'user_id' in session:
-        return jsonify({
-            'authenticated': True,
-            'user': {
-                'id': session['user_id'],
-                'name': session.get('user_name', 'Unknown'),
-                'role': session.get('user_role', 'candidate')
-            }
-        })
-    return jsonify({'authenticated': False})
-
-@app.route('/api/upload-resume', methods=['POST'])
-def upload_resume():
-    if 'user_id' not in session or session.get('user_role') != 'candidate':
-        return jsonify({'success': False, 'message': 'Please login as a candidate first'}), 401
-    
-    if 'resume' not in request.files:
-        return jsonify({'success': False, 'message': 'No file uploaded'}), 400
-    
-    file = request.files['resume']
-    
-    if file.filename == '':
-        return jsonify({'success': False, 'message': 'No file selected'}), 400
-    
-    if not allowed_file(file.filename):
-        return jsonify({'success': False, 'message': 'Invalid file type. Only PDF and DOCX allowed'}), 400
-    
-    filename = secure_filename(f"{session['user_id']}_{datetime.utcnow().timestamp()}_{file.filename}")
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(file_path)
-    
-    # Extract text and skills
-    resume_text = extract_text_from_resume(file_path)
-    skills = extract_skills_with_ai(resume_text)
-    
-    # Update user profile
-    users_collection.update_one(
-        {'_id': ObjectId(session['user_id'])},
-        {'$set': {
-            'resume_path': file_path,
-            'skills': skills,
-            'resume_text': resume_text,
-            'updated_at': datetime.utcnow()
-        }}
-    )
-    
-    return jsonify({
-        'success': True,
-        'message': 'Resume uploaded and processed successfully',
-        'skills': skills
-    })
-
-@app.route('/api/parse-resume', methods=['POST'])
-def parse_resume():
-    """
-    Parse resume file using RapidAPI AI Resume Parser
-    Requires authenticated user
-    File should be in request.files under 'resume' key
-    """
-    if 'user_id' not in session:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-    
-    if 'resume' not in request.files:
-        return jsonify({'success': False, 'message': 'No file uploaded'}), 400
-    
-    file = request.files['resume']
-    
-    if file.filename == '':
-        return jsonify({'success': False, 'message': 'No file selected'}), 400
-    
-    if not allowed_file(file.filename):
-        return jsonify({'success': False, 'message': 'Invalid file type. Only PDF and DOCX allowed'}), 400
-    
-    try:
-        # Save file temporarily
-        filename = secure_filename(f"{session['user_id']}_{datetime.utcnow().timestamp()}_{file.filename}")
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(file_path)
-        
-        # Parse resume using RapidAPI
-        parse_result = parse_resume_with_rapidapi(file_path)
-        
-        if not parse_result['success']:
-            return jsonify({
-                'success': False,
-                'message': parse_result['error']
-            }), 400
-        
-        parsed_data = parse_result['data']
-        
-        # Extract key information from parsed resume
-        response_data = {
-            'success': True,
-            'message': 'Resume parsed successfully',
-            'parsed_resume': parsed_data,
-            'file_path': file_path
-        }
-        
-        return jsonify(response_data), 200
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'Error parsing resume: {str(e)}'
-        }), 500
-
-@app.route('/api/candidate/jobs', methods=['GET'])
-def get_jobs_for_candidate():
-    if 'user_id' not in session or session.get('user_role') != 'candidate':
-        return jsonify({'success': False, 'message': 'Please login as a candidate first'}), 401
-    
-    user = users_collection.find_one({'_id': ObjectId(session['user_id'])})
-    candidate_skills = user.get('skills', [])
-    
-    jobs = list(jobs_collection.find({'status': 'active'}))
-    
-    # Calculate match scores
-    jobs_with_scores = []
-    for job in jobs:
-        job['_id'] = str(job['_id'])
-        job['recruiter_id'] = str(job['recruiter_id'])
-        
-        # Check if already applied
-        application = applications_collection.find_one({
-            'job_id': job['_id'],
-            'candidate_id': session['user_id']
-        })
-        
-        job['applied'] = application is not None
-        job['application_status'] = application.get('status') if application else None
-        
-        # Calculate match score using improved skill matching
-        required_skills = job.get('required_skills', [])
-        skills_match = calculate_skills_percentage(required_skills, candidate_skills)
-        job['match_score'] = skills_match.get('percentage', 0)
-        job['matched_skills'] = skills_match.get('matched_skills', [])
-        
-        jobs_with_scores.append(job)
-    
-    # Sort by match score
-    jobs_with_scores.sort(key=lambda x: x['match_score'], reverse=True)
-    
-    return jsonify({'success': True, 'jobs': jobs_with_scores})
-
-@app.route('/api/candidate/apply', methods=['POST'])
-def apply_for_job():
-    # Better authentication check with debugging
-    if 'user_id' not in session:
-        return jsonify({'success': False, 'message': 'Please login first'}), 401
-    
-    if 'user_role' not in session:
-        return jsonify({'success': False, 'message': 'Session error: role not found. Please login again'}), 401
-        
-    if session.get('user_role') != 'candidate':
-        return jsonify({'success': False, 'message': 'Only candidates can apply for jobs'}), 403
-    
-    data = request.json
-    job_id = data.get('job_id')
-    
-    if not job_id:
-        return jsonify({'success': False, 'message': 'Job ID required'}), 400
-    
-    job = jobs_collection.find_one({'_id': ObjectId(job_id)})
-    if not job:
-        return jsonify({'success': False, 'message': 'Job not found'}), 404
-    
-    # Check if already applied
-    existing_application = applications_collection.find_one({
-        'job_id': job_id,
-        'candidate_id': session['user_id']
-    })
-    
-    if existing_application:
-        return jsonify({'success': False, 'message': 'Already applied for this job'}), 400
-    
-    user = users_collection.find_one({'_id': ObjectId(session['user_id'])})
-    
-    if not user.get('resume_path'):
-        return jsonify({'success': False, 'message': 'Please upload your resume first'}), 400
-    
-    # Calculate match score using improved skill matching
-    candidate_skills = user.get('skills', [])
-    required_skills = job.get('required_skills', [])
-    skills_match = calculate_skills_percentage(required_skills, candidate_skills)
-    match_score = skills_match.get('percentage', 0)
-    
-    # Auto-shortlist if match score >= 60%
-    status = 'shortlisted' if match_score >= 60 else 'applied'
-    
-    application = {
-        'job_id': job_id,
-        'candidate_id': session['user_id'],
-        'candidate_name': user['name'],
-        'candidate_email': user['email'],
-        'candidate_skills': candidate_skills,
-        'match_score': round(match_score, 2),
-        'skills_percentage': match_score,
-        'matched_skills': skills_match.get('matched_skills', []),
-        'status': status,
-        'applied_at': datetime.utcnow(),
-        'assessment_completed': False,
-        'assessment_score': None
-    }
-    
-    result = applications_collection.insert_one(application)
-    
-    # Create notification for recruiter
-    if status == 'shortlisted':
-        create_notification(
-            str(job['recruiter_id']),
-            f"Candidate {user['name']} has been auto-shortlisted for {job['title']} with {match_score:.1f}% match",
-            'success'
-        )
-    
-    return jsonify({
-        'success': True,
-        'message': f'Application submitted successfully. {("You have been auto-shortlisted!" if status == "shortlisted" else "")}',
-        'application_id': str(result.inserted_id),
-        'status': status,
-        'match_score': round(match_score, 2)
-    })
-
-@app.route('/api/candidate/applications', methods=['GET'])
-def get_candidate_applications():
-    if 'user_id' not in session or session.get('user_role') != 'candidate':
-        return jsonify({'success': False, 'message': 'Please login as a candidate first'}), 401
-    
-    applications = list(applications_collection.find({'candidate_id': session['user_id']}))
-    
-    applications_with_jobs = []
-    for app in applications:
-        app['_id'] = str(app['_id'])
-        job = jobs_collection.find_one({'_id': ObjectId(app['job_id'])})
-        if job:
-            app['job_title'] = job['title']
-            app['company'] = job.get('company', 'N/A')
-        applications_with_jobs.append(app)
-    
-    return jsonify({'success': True, 'applications': applications_with_jobs})
-
-@app.route('/api/candidate/assessment/<application_id>', methods=['GET'])
-def get_assessment(application_id):
-    if 'user_id' not in session or session['user_role'] != 'candidate':
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-    
-    application = applications_collection.find_one({
-        '_id': ObjectId(application_id),
-        'candidate_id': session['user_id']
-    })
-    
-    if not application:
-        return jsonify({'success': False, 'message': 'Application not found'}), 404
-    
-    if application.get('assessment_completed'):
-        return jsonify({'success': False, 'message': 'Assessment already completed'}), 400
-    
-    if application['status'] != 'shortlisted':
-        return jsonify({'success': False, 'message': 'Only shortlisted candidates can take assessment'}), 400
-    
-    # Get or create assessment
-    assessment = assessments_collection.find_one({'application_id': application_id})
-    
-    if not assessment:
-        job = jobs_collection.find_one({'_id': ObjectId(application['job_id'])})
-        questions = generate_assessment_questions(job['title'], job.get('required_skills', []))
-        
-        assessment = {
-            'application_id': application_id,
-            'candidate_id': session['user_id'],
-            'job_id': application['job_id'],
-            'questions': questions,
-            'answers': [],
-            'score': None,
-            'completed': False,
-            'started_at': datetime.utcnow(),
-            'expires_at': datetime.utcnow() + timedelta(minutes=15)
-        }
-        
-        assessments_collection.insert_one(assessment)
-    
-    # Remove correct answers before sending to frontend
-    questions_for_frontend = []
-    for q in assessment['questions']:
-        questions_for_frontend.append({
-            'id': q['id'],
-            'question': q['question'],
-            'options': q['options']
-        })
-    
-    return jsonify({
-        'success': True,
-        'assessment': {
-            'application_id': application_id,
-            'questions': questions_for_frontend,
-            'total_questions': len(questions_for_frontend),
-            'time_limit': 15
-        }
-    })
-
-@app.route('/api/candidate/submit-assessment', methods=['POST'])
-def submit_assessment():
-    if 'user_id' not in session or session.get('user_role') != 'candidate':
-        return jsonify({'success': False, 'message': 'Please login as a candidate first'}), 401
-    
-    data = request.json
-    application_id = data.get('application_id')
-    answers = data.get('answers', {})
-    
-    assessment = assessments_collection.find_one({
-        'application_id': application_id,
-        'candidate_id': session['user_id']
-    })
-    
-    if not assessment:
-        return jsonify({'success': False, 'message': 'Assessment not found'}), 404
-    
-    if assessment.get('completed'):
-        return jsonify({'success': False, 'message': 'Assessment already completed'}), 400
-    
-    # Calculate score
-    correct_answers = 0
-    total_questions = len(assessment['questions'])
-    
-    for question in assessment['questions']:
-        question_id = str(question['id'])
-        if question_id in answers:
-            if int(answers[question_id]) == question['correct']:
-                correct_answers += 1
-    
-    score = (correct_answers / total_questions) * 100
-    
-    # Update assessment
-    assessments_collection.update_one(
-        {'_id': assessment['_id']},
-        {'$set': {
-            'answers': answers,
-            'score': round(score, 2),
-            'completed': True,
-            'completed_at': datetime.utcnow()
-        }}
-    )
-    
-    # Update application
-    new_status = 'selected' if score >= 60 else 'rejected'
-    
-    applications_collection.update_one(
-        {'_id': ObjectId(application_id)},
-        {'$set': {
-            'assessment_completed': True,
-            'assessment_score': round(score, 2),
-            'status': new_status,
-            'updated_at': datetime.utcnow()
-        }}
-    )
-    
-    # Get application and job details for notification
-    application = applications_collection.find_one({'_id': ObjectId(application_id)})
-    job = jobs_collection.find_one({'_id': ObjectId(application['job_id'])})
-    
-    # Create notification for recruiter
-    if new_status == 'selected':
-        create_notification(
-            str(job['recruiter_id']),
-            f"Candidate {application['candidate_name']} passed the assessment for {job['title']} with {score:.1f}%",
-            'success'
-        )
-    
-    return jsonify({
-        'success': True,
-        'message': f'Assessment submitted successfully',
-        'score': round(score, 2),
-        'status': new_status,
-        'passed': score >= 60
-    })
-
-@app.route('/api/recruiter/jobs', methods=['GET'])
-def get_recruiter_jobs():
-    if 'user_id' not in session or session['user_role'] != 'recruiter':
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-    
-    jobs = list(jobs_collection.find({'recruiter_id': ObjectId(session['user_id'])}))
-    
-    for job in jobs:
-        job['_id'] = str(job['_id'])
-        job['recruiter_id'] = str(job['recruiter_id'])
-        
-        # Count applications
-        total_applications = applications_collection.count_documents({'job_id': job['_id']})
-        hired = applications_collection.count_documents({'job_id': job['_id'], 'status': 'hired'})
-        rejected = applications_collection.count_documents({'job_id': job['_id'], 'status': 'rejected'})
-        
-        job['total_applications'] = total_applications
-        job['hired_count'] = hired
-        job['rejected_count'] = rejected
-    
-    return jsonify({'success': True, 'jobs': jobs})
-
-@app.route('/api/recruiter/post-job', methods=['POST'])
-def post_job():
-    if 'user_id' not in session or session['user_role'] != 'recruiter':
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-    
-    data = request.json
-    
-    job = {
-        'recruiter_id': ObjectId(session['user_id']),
-        'recruiter_name': session['user_name'],
-        'title': data.get('title', '').strip(),
-        'company': data.get('company', '').strip(),
-        'description': data.get('description', '').strip(),
-        'required_skills': [s.strip() for s in data.get('required_skills', []) if s.strip()],
-        'experience': data.get('experience', '').strip(),
-        'education': data.get('education', '').strip(),
-        'salary': data.get('salary', '').strip(),
-        'location': data.get('location', '').strip(),
-        'status': 'active',
-        'created_at': datetime.utcnow()
-    }
-    
-    if not job['title'] or not job['description'] or not job['required_skills']:
-        return jsonify({'success': False, 'message': 'Title, description, and required skills are mandatory'}), 400
-    
-    result = jobs_collection.insert_one(job)
-    
-    return jsonify({
-        'success': True,
-        'message': 'Job posted successfully',
-        'job_id': str(result.inserted_id)
-    })
-
-@app.route('/api/recruiter/screen-application', methods=['POST'])
-def screen_application():
-    if 'user_id' not in session or session['user_role'] != 'recruiter':
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-
-    data = request.json
-    application_id = data.get('application_id')
-
-    if not application_id:
-        return jsonify({'success': False, 'message': 'Application ID required'}), 400
-
-    application = applications_collection.find_one({'_id': ObjectId(application_id)})
-    if not application:
-        return jsonify({'success': False, 'message': 'Application not found'}), 404
-
-    job = jobs_collection.find_one({'_id': ObjectId(application['job_id'])})
-    if not job or str(job.get('recruiter_id')) != session['user_id']:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 403
-
-    candidate = users_collection.find_one({'_id': ObjectId(application['candidate_id'])})
-    if not candidate:
-        return jsonify({'success': False, 'message': 'Candidate not found'}), 404
-
-    resume_text = candidate.get('resume_text', '')
-    candidate_skills = candidate.get('skills', [])
-
-    required_skills = job.get('required_skills', [])
-    
-    # If required_skills is empty or incomplete, extract from job description
-    if not required_skills or len(required_skills) < 2:
-        job_description = job.get('description', '')
-        if job_description:
-            # Try API first
-            skills_parse_result = parse_skills_from_jd(job_description)
-            if skills_parse_result.get('success'):
-                parsed_data = skills_parse_result.get('data', {})
-                extracted_skills = parsed_data.get('skills', []) or parsed_data.get('required_skills', [])
-                if extracted_skills:
-                    required_skills = extracted_skills
+        # Send Email
+        try:
+            msg = Message('VAANI - Verify your Email', recipients=[email])
+            msg.html = render_template('email_otp.html', otp=otp)
             
-            # Fallback to local extraction if API didn't work
-            if not required_skills:
-                required_skills = extract_skills_from_job_description(job_description)
-    
-    # If still no skills, try extracting from job skills directly
-    if not required_skills and job.get('skills'):
-        required_skills = job.get('skills', [])
-    
-    # Log for debugging
-    print(f"\n📊 Screening Debug Info:")
-    print(f"   Job Required Skills: {required_skills}")
-    print(f"   Candidate Skills: {candidate_skills}")
-    
-    # Calculate skills percentage using our improved matching
-    skills_percentage_data = calculate_skills_percentage(required_skills, candidate_skills)
-    skills_percentage = skills_percentage_data.get('percentage', 0.0)
-    print(f"   Skills Match Result: {skills_percentage}%")
-    print(f"   Matched Skills: {skills_percentage_data.get('matched_skills')}")
-    print(f"   Missing Skills: {skills_percentage_data.get('missing_skills')}\n")
-    
-    # Use skills percentage and text similarity for overall score
-    desc_score = calculate_text_similarity(resume_text, job.get('description', ''))
-    # Skills percentage (70%) + Description similarity (30%)
-    overall_score = round((0.7 * skills_percentage) + (0.3 * desc_score), 2)
+            # Embed Logo as CID
+            logo_path = os.path.join(app.static_folder, 'img/icon-512.png')
+            if os.path.exists(logo_path):
+                with open(logo_path, 'rb') as fp:
+                    msg.attach("logo.png", "image/png", fp.read(), 'inline', headers={'Content-ID': '<app_logo>'})
+            
+            mail.send(msg)
+            flash('OTP sent to your email!', 'info')
+            return render_template('verify_otp.html', email=email)
+        except Exception as e:
+            print(f"CRITICAL EMAIL ERROR: {str(e)}")
+            if "535" in str(e):
+                print("DEBUG: This is an Authentication Error. Check your Gmail App Password.")
+            flash('Failed to send OTP. Please check your email credentials/settings.', 'danger')
+            
+    return render_template('signup.html')
 
-    required_experience = parse_required_experience(job.get('experience', ''))
-    candidate_experience = extract_years_experience(resume_text)
-    experience_ok = candidate_experience >= required_experience
-
-    required_education = parse_required_education(job.get('education', ''))
-    candidate_education = extract_education_level(resume_text)
-    education_ok = candidate_education >= required_education if required_education else True
-
-    is_selected = overall_score >= 60 and experience_ok and education_ok
-    screening_status = 'Selected' if is_selected else 'Not Selected'
-
-    applications_collection.update_one(
-        {'_id': ObjectId(application_id)},
-        {'$set': {
-            'screening_result': screening_status,
-            'screening_score': overall_score,
-            'skills_percentage': skills_percentage_data.get('percentage'),
-            'matched_skills': skills_percentage_data.get('matched_skills'),
-            'missing_skills': skills_percentage_data.get('missing_skills'),
-            'skills_match_category': skills_percentage_data.get('match_category'),
-            'screened_at': datetime.utcnow(),
-            'status': 'selected' if is_selected else 'rejected'
-        }}
-    )
-
-    # Get professional email template
-    candidate_email = application.get('candidate_email') or candidate.get('email')
-    candidate_name = application.get('candidate_name', 'Candidate')
-    job_title = job.get('title', 'Position')
-    company = job.get('company', 'Our Company')
-    status = 'selected' if is_selected else 'rejected'
+@app.route('/verify-otp', methods=['POST'])
+def verify_otp():
+    email = request.form.get('email')
+    user_otp = request.form.get('otp')
     
-    email_template = generate_professional_email(candidate_name, job_title, company, status)
-    email_sent, email_error = send_email_via_nodemailer(
-        candidate_email,
-        email_template['subject'],
-        email_template['text'],
-        email_template['html']
-    )
-
-    if not email_sent:
-        return jsonify({
-            'success': False,
-            'message': 'Screening completed but email failed to send',
-            'screening_status': screening_status,
-            'screening_score': overall_score,
-            'email_error': email_error
-        }), 500
-
-    return jsonify({
-        'success': True,
-        'message': 'Screening completed and email sent',
-        'screening_status': screening_status,
-        'screening_score': overall_score,
-        'skills_percentage': skills_percentage_data.get('percentage'),
-        'skills_match_category': skills_percentage_data.get('match_category'),
-        'matched_skills': skills_percentage_data.get('matched_skills'),
-        'missing_skills': skills_percentage_data.get('missing_skills'),
-        'skills_details': skills_percentage_data.get('match_details')
-    })
-
-@app.route('/api/recruiter/applications/<job_id>', methods=['GET'])
-def get_job_applications(job_id):
-    if 'user_id' not in session or session['user_role'] != 'recruiter':
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+    temp_data = Database.db.temp_users.find_one({'email': email})
     
-    job = jobs_collection.find_one({
-        '_id': ObjectId(job_id),
-        'recruiter_id': ObjectId(session['user_id'])
-    })
-    
-    if not job:
-        return jsonify({'success': False, 'message': 'Job not found'}), 404
-    
-    applications = list(applications_collection.find({'job_id': job_id}))
-    
-    for app in applications:
-        app['_id'] = str(app['_id'])
-    
-    # Sort by match score
-    applications.sort(key=lambda x: x.get('match_score', 0), reverse=True)
-    
-    return jsonify({'success': True, 'applications': applications})
-
-@app.route('/api/recruiter/update-application', methods=['POST'])
-def update_application_status():
-    if 'user_id' not in session or session['user_role'] != 'recruiter':
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-    
-    data = request.json
-    application_id = data.get('application_id')
-    new_status = data.get('status')
-    
-    if new_status not in ['shortlisted', 'rejected', 'hired']:
-        return jsonify({'success': False, 'message': 'Invalid status'}), 400
-    
-    application = applications_collection.find_one({'_id': ObjectId(application_id)})
-    
-    if not application:
-        return jsonify({'success': False, 'message': 'Application not found'}), 404
-    
-    # Verify recruiter owns this job
-    job = jobs_collection.find_one({
-        '_id': ObjectId(application['job_id']),
-        'recruiter_id': ObjectId(session['user_id'])
-    })
-    
-    if not job:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 403
-    
-    applications_collection.update_one(
-        {'_id': ObjectId(application_id)},
-        {'$set': {
-            'status': new_status,
-            'updated_at': datetime.utcnow()
-        }}
-    )
-
-    # Email candidate on status update with professional template
-    candidate_email = application.get('candidate_email')
-    if not candidate_email:
-        candidate_user = users_collection.find_one({'_id': ObjectId(application['candidate_id'])})
-        candidate_email = candidate_user.get('email') if candidate_user else None
+    if temp_data and temp_data['otp'] == user_otp:
+        # Create actual user
+        user_data = {
+            'username': temp_data['username'],
+            'email': temp_data['email'],
+            'password': temp_data['password'],
+            'profile_pic': f"https://ui-avatars.com/api/?name={temp_data['username']}&background=random",
+            'online': False,
+            'last_seen': None
+        }
+        Database.db.users.insert_one(user_data)
+        Database.db.temp_users.delete_one({'email': email})
         
-    if candidate_email:
-        candidate_name = application.get('candidate_name', 'Candidate')
-        job_title = job.get('title', 'Position')
-        company = job.get('company', 'Our Company')
+        flash('Account verified successfully! Please login.', 'success')
+        return redirect(url_for('login'))
+    else:
+        flash('Invalid OTP. Please try again.', 'danger')
+        return render_template('verify_otp.html', email=email)
+
+@app.route('/resend-otp', methods=['POST'])
+def resend_otp():
+    email = request.form.get('email')
+    temp_user = Database.db.temp_users.find_one({'email': email})
+    
+    if temp_user:
+        # Generate new OTP
+        otp = ''.join(random.choices(string.digits, k=6))
+        Database.db.temp_users.update_one({'email': email}, {'$set': {'otp': otp, 'timestamp': datetime.now(timezone.utc)}})
         
-        email_template = generate_professional_email(candidate_name, job_title, company, new_status)
-        send_email_via_nodemailer(
-            candidate_email,
-            email_template['subject'],
-            email_template['text'],
-            email_template['html']
+        # Send Email
+        try:
+            msg = Message('VAANI - New OTP for Verification', recipients=[email])
+            msg.html = render_template('email_otp.html', otp=otp)
+            
+            # Embed Logo
+            logo_path = os.path.join(app.static_folder, 'img/icon-512.png')
+            if os.path.exists(logo_path):
+                with open(logo_path, 'rb') as fp:
+                    msg.attach("logo.png", "image/png", fp.read(), 'inline', headers={'Content-ID': '<app_logo>'})
+            
+            mail.send(msg)
+            return jsonify({'success': True, 'message': 'New OTP sent to your email!'})
+        except Exception as e:
+            return jsonify({'success': False, 'message': 'Failed to send email. Please try again later.'}), 500
+            
+    return jsonify({'success': False, 'message': 'Session expired. Please signup again.'}), 404
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        user_data = Database.db.users.find_one({'username': username})
+        if user_data and User.verify_password(user_data['password'], password):
+            user_obj = User(user_data)
+            login_user(user_obj)
+            return redirect(url_for('chat'))
+        else:
+            flash('Login Unsuccessful. Please check username and password', 'danger')
+            
+    return render_template('login.html')
+
+@app.route('/logout')
+@login_required
+def logout():
+    Database.db.users.update_one({'_id': ObjectId(current_user.id)}, {'$set': {'online': False, 'last_seen': datetime.now(timezone.utc)}})
+    logout_user()
+    return redirect(url_for('index'))
+
+@app.route('/chat')
+@login_required
+def chat():
+    user_data = Database.db.users.find_one({'_id': ObjectId(current_user.id)})
+    if not user_data:
+        return redirect(url_for('logout'))
+        
+    pinned_ids = user_data.get('pinned_contacts') or []
+    
+    # Filter by connections
+    connections = user_data.get('connections') or []
+    connection_ids = [ObjectId(c_id) for c_id in connections if c_id and c_id != 'null']
+    
+    users = Database.db.users.find({'_id': {'$in': connection_ids}})
+    contacts = []
+    
+    # Check if AI feature is enabled
+    config = Database.db.config.find_one({'_id': 'features'}) or {}
+    if config.get('ai_bot', True):
+        # Add Virtual AI Bot
+        contacts.append({
+            'id': 'vaani_ai_bot',
+            'username': 'VAANI (AI)',
+            'profile_pic': '/static/img/VAANI AI.png',
+            'last_message': 'Always here to help! 🤖',
+            'online': True,
+            'pinned': True,
+            'about': 'I am your AI companion.'
+        })
+    
+    # Also fetch requests count for badge
+    requests_count = len(user_data.get('requests_received') or [])
+
+    for u in users:
+        u_id = str(u['_id'])
+        # Get last message for snippet
+        last_msg = Database.db.messages.find_one(
+            {'$or': [
+                {'sender_id': current_user.id, 'receiver_id': u_id},
+                {'sender_id': u_id, 'receiver_id': current_user.id}
+            ]},
+            sort=[('timestamp', -1)]
         )
+        
+        contacts.append({
+            'id': u_id,
+            'username': u['username'],
+            'profile_pic': u.get('profile_pic'),
+            'about': u.get('about', 'Available'),
+            'online': u.get('online', False),
+            'pinned': u_id in pinned_ids,
+            'last_message': last_msg['message'] if last_msg else 'No messages yet'
+        })
     
-    # Create notification for candidate
-    create_notification(
-        application['candidate_id'],
-        f"Your application for {job['title']} has been {new_status}",
-        'info'
+    # Sort: Pinned first, then by username
+    contacts.sort(key=lambda x: (not x['pinned'], x['username']))
+    return render_template('chat.html', contacts=contacts, requests_count=requests_count)
+
+@app.route('/toggle_pin', methods=['POST'])
+@login_required
+def toggle_pin():
+    contact_id = request.form.get('contact_id')
+    user_id = ObjectId(current_user.id)
+    
+    user_data = Database.db.users.find_one({'_id': user_id})
+    pinned = user_data.get('pinned_contacts', [])
+    
+    if contact_id in pinned:
+        pinned.remove(contact_id)
+        action = 'unpinned'
+    else:
+        pinned.append(contact_id)
+        action = 'pinned'
+        
+    Database.db.users.update_one({'_id': user_id}, {'$set': {'pinned_contacts': pinned}})
+    return jsonify({'success': True, 'action': action})
+
+@app.route('/profile', methods=['POST'])
+@login_required
+def update_profile():
+    about = request.form.get('about')
+    username = request.form.get('username')
+    
+    update_data = {}
+    if about:
+        update_data['about'] = about
+    if username:
+        # Check if username is already taken by another user
+        if username != current_user.username and Database.db.users.find_one({'username': username}):
+            return jsonify({'success': False, 'message': 'Username already taken'}), 400
+        update_data['username'] = username
+
+    if update_data:
+        Database.db.users.update_one({'_id': ObjectId(current_user.id)}, {'$set': update_data})
+        return jsonify({'success': True, 'message': 'Profile updated successfully'})
+    
+    return jsonify({'success': False, 'message': 'No changes provided'}), 400
+
+@app.route('/update_profile_pic', methods=['POST'])
+@login_required
+def update_profile_pic():
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': 'No file part'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'success': False, 'message': 'No selected file'}), 400
+    
+    try:
+        from PIL import Image
+        import io
+        import base64
+        
+        # Open and resize
+        img = Image.open(file.stream)
+        # Convert to RGB if it's RGBA (to save space as JPEG or just keep as PNG)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        
+        img.thumbnail((128, 128))
+        
+        # Save to buffer
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=85)
+        img_str = base64.b64encode(buffer.getvalue()).decode()
+        pic_url = f"data:image/jpeg;base64,{img_str}"
+        
+        Database.db.users.update_one({'_id': ObjectId(current_user.id)}, {'$set': {'profile_pic': pic_url}})
+        return jsonify({'success': True, 'profile_pic': pic_url})
+    except Exception as e:
+        print(f"PROFILE PIC ERROR: {e}")
+        return jsonify({'success': False, 'message': f"Failed to process image: {str(e)}"}), 500
+
+@app.route('/get_messages/<receiver_id>')
+@login_required
+def get_messages(receiver_id):
+    # Fetch chat history between current user and receiver
+    query = {
+        '$or': [
+            {'sender_id': current_user.id, 'receiver_id': receiver_id},
+            {'sender_id': receiver_id, 'receiver_id': current_user.id}
+        ]
+    }
+    messages = list(Database.db.messages.find(query).sort('timestamp', 1))
+    for m in messages:
+        m['_id'] = str(m['_id'])
+        if isinstance(m['timestamp'], datetime):
+            m['timestamp'] = m['timestamp'].isoformat()
+    
+    # Mark messages as read
+    Database.db.messages.update_many(
+        {'sender_id': receiver_id, 'receiver_id': current_user.id, 'read': False},
+        {'$set': {'read': True}}
     )
     
-    return jsonify({'success': True, 'message': f'Application {new_status} successfully'})
+    return jsonify(messages)
 
-@app.route('/api/recruiter/notifications', methods=['GET'])
-def get_recruiter_notifications():
-    if 'user_id' not in session or session['user_role'] != 'recruiter':
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-    
-    notifications = list(notifications_collection.find(
-        {'user_id': session['user_id']}
-    ).sort('created_at', -1).limit(20))
-    
-    for notif in notifications:
-        notif['_id'] = str(notif['_id'])
-        notif['created_at'] = notif['created_at'].isoformat()
-    
-    return jsonify({'success': True, 'notifications': notifications})
+@app.route('/clear_chat/<receiver_id>', methods=['POST'])
+@login_required
+def clear_chat(receiver_id):
+    # Permanently delete messages between these two users
+    # Note: For AI bot, messages aren't saved to 'messages' collection currently, but this covers future support
+    query = {
+        '$or': [
+            {'sender_id': current_user.id, 'receiver_id': receiver_id},
+            {'sender_id': receiver_id, 'receiver_id': current_user.id}
+        ]
+    }
+    Database.db.messages.delete_many(query)
+    return jsonify({'success': True})
 
-@app.route('/api/recruiter/mark-notification-read', methods=['POST'])
-def mark_notification_read():
-    if 'user_id' not in session or session['user_role'] != 'recruiter':
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+@app.route('/upload', methods=['POST'])
+@login_required
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
     
-    data = request.json
-    notification_id = data.get('notification_id')
+    try:
+        filename = secure_filename(file.filename)
+        # Helper for image to base64
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+            from PIL import Image
+            import io
+            import base64
+            img = Image.open(file.stream)
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            # Downscale slightly for chat performance if very large
+            img.thumbnail((800, 800))
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=75)
+            img_str = base64.b64encode(buffer.getvalue()).decode()
+            return jsonify({'url': f"data:image/jpeg;base64,{img_str}", 'filename': filename})
+        # Handle small audio blobs from recorder (Base64 as well)
+        elif filename.lower().endswith(('.wav', '.mp3', '.blob')):
+             import base64
+             audio_data = file.read()
+             if len(audio_data) > 2 * 1024 * 1024: # 2MB limit for base64
+                 return jsonify({'error': 'Voice note too large for serverless memory.'}), 400
+             audio_str = base64.b64encode(audio_data).decode()
+             # Guess mime
+             mime = "audio/wav"
+             if filename.lower().endswith('.mp3'): mime = "audio/mpeg"
+             return jsonify({'url': f"data:{mime};base64,{audio_str}", 'filename': filename})
+        else:
+             return jsonify({'error': 'Only images and voice notes are supported on this environment currently.'}), 400
+    except Exception as e:
+        print(f"UPLOAD ERROR: {e}")
+        return jsonify({'error': f"Failed to upload: {str(e)}"}), 500
+
+@app.route('/search_users')
+@login_required
+def search_users():
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify([])
     
-    notifications_collection.update_one(
-        {'_id': ObjectId(notification_id), 'user_id': session['user_id']},
-        {'$set': {'read': True}}
+    # Search by username (case insensitive)
+    users = Database.db.users.find({
+        'username': {'$regex': query, '$options': 'i'},
+        '_id': {'$ne': ObjectId(current_user.id)}
+    })
+    
+    results = []
+    me = Database.db.users.find_one({'_id': ObjectId(current_user.id)})
+    my_connections = me.get('connections', [])
+    my_sent = me.get('requests_sent', [])
+    my_received = me.get('requests_received', [])
+    
+    for u in users:
+        u_id = str(u['_id'])
+        status = 'none'
+        if u_id in my_connections:
+            status = 'connected'
+        elif u_id in me.get('blocked_users', []):
+            status = 'blocked'
+        elif u_id in my_sent:
+            status = 'pending_sent'
+        elif u_id in my_received:
+            status = 'pending_received'
+            
+        results.append({
+            'id': u_id,
+            'username': u['username'],
+            'profile_pic': u.get('profile_pic', 'default.png'),
+            'about': u.get('about', 'Available'),
+            'status': status
+        })
+        
+    return jsonify(results)
+
+@app.route('/send_request', methods=['POST'])
+@login_required
+def send_request():
+    target_id = request.form.get('target_id')
+    if not target_id:
+        return jsonify({'success': False, 'message': 'Target ID required'}), 400
+        
+    # Add to my sent, add to their received
+    Database.db.users.update_one(
+        {'_id': ObjectId(current_user.id)},
+        {'$addToSet': {'requests_sent': target_id}}
+    )
+    Database.db.users.update_one(
+        {'_id': ObjectId(target_id)},
+        {'$addToSet': {'requests_received': current_user.id}}
     )
     
     return jsonify({'success': True})
 
-@app.route('/api/stats', methods=['GET'])
-def get_stats():
-    try:
-        global latest_error
-        # These calls will trigger a connection attempt if it hasn't happened yet
-        total_jobs = jobs_collection.count_documents({'status': 'active'})
-        total_candidates = users_collection.count_documents({'role': 'candidate'})
-        total_applications = applications_collection.count_documents({})
-        companies = jobs_collection.distinct('company')
-        is_connected = True
-    except Exception as e:
-        error_msg = str(e)
-        print(f"Stats fetch error: {error_msg}")
-        total_jobs = 0
-        total_candidates = 0
-        total_applications = 0
-        companies = []
-        is_connected = False
-        latest_error = error_msg
+@app.route('/accept_request', methods=['POST'])
+@login_required
+def accept_request():
+    target_id = request.form.get('target_id')
     
-    mongo_env_set = os.environ.get('MONGO_URI') is not None
-    
-    return jsonify({
-        'success': True,
-        'stats': {
-            'total_jobs': total_jobs,
-            'total_candidates': total_candidates,
-            'total_applications': total_applications,
-            'total_companies': len([c for c in companies if c]),
-            'database_connected': is_connected,
-            'mongo_uri_set': mongo_env_set,
-            'error_hint': latest_error if not is_connected else None
+    # Add to connections for both
+    Database.db.users.update_one(
+        {'_id': ObjectId(current_user.id)},
+        {
+            '$addToSet': {'connections': target_id},
+            '$pull': {'requests_received': target_id}
         }
+    )
+    Database.db.users.update_one(
+        {'_id': ObjectId(target_id)},
+        {
+            '$addToSet': {'connections': current_user.id},
+            '$pull': {'requests_sent': current_user.id}
+        }
+    )
+    
+    return jsonify({'success': True})
+
+@app.route('/reject_request', methods=['POST'])
+@login_required
+def reject_request():
+    target_id = request.form.get('target_id')
+    
+    Database.db.users.update_one(
+        {'_id': ObjectId(current_user.id)},
+        {'$pull': {'requests_received': target_id}}
+    )
+    Database.db.users.update_one(
+        {'_id': ObjectId(target_id)},
+        {'$pull': {'requests_sent': current_user.id}}
+    )
+    
+    return jsonify({'success': True})
+
+@app.route('/get_requests')
+@login_required
+def get_requests():
+    me = Database.db.users.find_one({'_id': ObjectId(current_user.id)})
+    req_ids = me.get('requests_received', [])
+    
+    if not req_ids:
+        return jsonify([])
+        
+    valid_req_ids = [ObjectId(rid) for rid in req_ids if rid and rid != 'null']
+    users = Database.db.users.find({'_id': {'$in': valid_req_ids}})
+    results = []
+    for u in users:
+        results.append({
+            'id': str(u['_id']),
+            'username': u['username'],
+            'profile_pic': u.get('profile_pic', 'default.png'),
+            'about': u.get('about', 'Available')
+        })
+    return jsonify(results)
+
+@app.route('/admin')
+def admin_panel():
+    if not session.get('admin_authed'):
+        return render_template_string("""
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Verifying Identity...</title>
+                <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+                <style>
+                    body { background: #0f0c29; display: flex; align-items: center; justify-content: center; height: 100vh; color: white; font-family: 'Courier New', monospace; }
+                    .pin-display { font-size: 2rem; letter-spacing: 0.5rem; border-bottom: 2px solid #00d2ff; padding: 10px; width: 200px; text-align: center; margin-bottom: 20px; }
+                    .numpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-width: 300px; }
+                    .num-btn { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color:white; padding: 15px; font-size: 1.2rem; border-radius: 10px; cursor: pointer; transition: 0.2s; }
+                    .num-btn:hover { background: rgba(0, 210, 255, 0.3); border-color: #00d2ff;box-shadow: 0 0 10px #00d2ff; }
+                    .login-container { text-align: center; background: rgba(0,0,0,0.5); padding: 40px; border-radius: 20px; border: 1px solid rgba(0, 210, 255, 0.3); backdrop-filter: blur(10px); }
+                </style>
+            </head>
+            <body>
+                <div class="login-container">
+                    <h3 class="mb-4">SYSTEM ACCCESS</h3>
+                    <div id="pin-display" class="pin-display">_ _ _ _ _</div>
+                    <div class="numpad">
+                        <button class="num-btn" onclick="addDigit(1)">1</button>
+                        <button class="num-btn" onclick="addDigit(2)">2</button>
+                        <button class="num-btn" onclick="addDigit(3)">3</button>
+                        <button class="num-btn" onclick="addDigit(4)">4</button>
+                        <button class="num-btn" onclick="addDigit(5)">5</button>
+                        <button class="num-btn" onclick="addDigit(6)">6</button>
+                        <button class="num-btn" onclick="addDigit(7)">7</button>
+                        <button class="num-btn" onclick="addDigit(8)">8</button>
+                        <button class="num-btn" onclick="addDigit(9)">9</button>
+                        <button class="num-btn" onclick="addDigit('C')">C</button>
+                        <button class="num-btn" onclick="addDigit(0)">0</button>
+                        <button class="num-btn" style="background: #00d2ff; color: #000;" onclick="submitPin()">GO</button>
+                    </div>
+                </div>
+
+                <script>
+                    let pin = '';
+                    const display = document.getElementById('pin-display');
+                    
+                    function updateDisplay() {
+                        let dots = '';
+                        for(let i=0; i<pin.length; i++) dots += '* ';
+                        for(let i=pin.length; i<5; i++) dots += '_ ';
+                        display.innerText = dots.trim();
+                    }
+
+                    function addDigit(d) {
+                        if(d === 'C') {
+                            pin = '';
+                        } else {
+                            if(pin.length < 5) pin += d;
+                        }
+                        updateDisplay();
+                    }
+
+                    async function submitPin() {
+                        const res = await fetch('/admin/verify', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({pin: pin})
+                        });
+                        const data = await res.json();
+                        if(data.success) {
+                            window.location.reload();
+                        } else {
+                            alert('ACCESS DENIED');
+                            pin = '';
+                            updateDisplay();
+                        }
+                    }
+                </script>
+            </body>
+            </html>
+        """)
+    return render_template('admin.html')
+
+@app.route('/admin/verify', methods=['POST'])
+def admin_verify():
+    pin = request.json.get('pin')
+    if pin == '70458':
+        session['admin_authed'] = True
+        return jsonify({'success': True})
+    return jsonify({'success': False}), 401
+
+@app.route('/admin/set_theme', methods=['POST'])
+def set_global_theme():
+    if not session.get('admin_authed'): return jsonify({'error': 'Unauthorized'}), 401
+    
+    data = request.json
+    theme = data.get('theme', 'default')
+    colors = data.get('colors') # Optional, for custom themes
+    
+    update_data = {'theme': theme}
+    if colors:
+        update_data['colors'] = colors
+    
+    # Store in a global config collection
+    Database.db.config.update_one(
+        {'_id': 'global_theme'}, 
+        {'$set': update_data}, 
+        upsert=True
+    )
+    
+    # Broadcast to all connected clients
+    emit_data = {'theme': theme}
+    if colors:
+        emit_data['colors'] = colors
+        
+    socketio.emit('theme_change', emit_data)
+    return jsonify({'success': True})
+
+@app.route('/admin/stats')
+def admin_stats():
+    if not session.get('admin_authed'): return jsonify({'error': 'Unauthorized'}), 401
+    total = Database.db.users.count_documents({})
+    online = Database.db.users.count_documents({'online': True})
+    return jsonify({'total': total, 'online': online})
+
+@app.route('/admin/maintenance_status')
+def maintenance_status():
+    config = Database.db.config.find_one({'_id': 'maintenance'})
+    active = config.get('active', False) if config else False
+    return jsonify({'active': active})
+
+@app.route('/admin/toggle_maintenance', methods=['POST'])
+def toggle_maintenance():
+    if not session.get('admin_authed'): return jsonify({'error': 'Unauthorized'}), 401
+    active = request.json.get('active', False)
+    Database.db.config.update_one({'_id': 'maintenance'}, {'$set': {'active': active}}, upsert=True)
+    return jsonify({'success': True})
+
+@app.route('/admin/clear_global', methods=['POST'])
+def clear_global_chat():
+    if not session.get('admin_authed'): return jsonify({'error': 'Unauthorized'}), 401
+    Database.db.global_messages.delete_many({})
+    socketio.emit('start_reload', broadcast=True) # Force refresh for everyone
+    return jsonify({'success': True})
+
+@app.route('/admin/search_user')
+def search_user_admin():
+    if not session.get('admin_authed'): return jsonify({'error': 'Unauthorized'}), 401
+    q = request.args.get('q', '')
+    users = Database.db.users.find({
+        '$or': [
+            {'username': {'$regex': q, '$options': 'i'}},
+            {'email': {'$regex': q, '$options': 'i'}}
+        ]
+    }).limit(10)
+    
+    res = []
+    for u in users:
+        res.append({'id': str(u['_id']), 'username': u['username'], 'email': u['email']})
+    return jsonify(res)
+
+@app.route('/admin/ban_user', methods=['POST'])
+def ban_user():
+    if not session.get('admin_authed'): return jsonify({'error': 'Unauthorized'}), 401
+    uid = request.json.get('user_id')
+    # In a real app, set a 'banned' flag or delete
+    Database.db.users.delete_one({'_id': ObjectId(uid)}) 
+    return jsonify({'success': True})
+
+@app.route('/admin/set_wallpaper', methods=['POST'])
+def set_wallpaper():
+    if not session.get('admin_authed'): return jsonify({'error': 'Unauthorized'}), 401
+    
+    wallpaper = request.json.get('wallpaper')
+    Database.db.config.update_one({'_id': 'wallpaper'}, {'$set': {'url': wallpaper}}, upsert=True)
+    
+    socketio.emit('wallpaper_change', {'wallpaper': wallpaper})
+    return jsonify({'success': True})
+
+@app.route('/admin/trigger_shake', methods=['POST'])
+def trigger_shake():
+    if not session.get('admin_authed'): return jsonify({'error': 'Unauthorized'}), 401
+    socketio.emit('screen_shake')
+    return jsonify({'success': True})
+
+@app.route('/admin/feature_flags')
+def get_feature_flags():
+    config = Database.db.config.find_one({'_id': 'features'}) or {}
+    return jsonify({
+        'voice_notes': config.get('voice_notes', True),
+        'file_uploads': config.get('file_uploads', True),
+        'signups': config.get('signups', True),
+        'slow_mode': config.get('slow_mode', False),
+        'ai_bot': config.get('ai_bot', True)
     })
 
-# Debug endpoint for testing skill matching
-@app.route('/api/debug/test-skills', methods=['POST'])
-def test_skills():
-    """Debug endpoint to test skill matching"""
-    data = request.json
-    job_skills = data.get('job_skills', [])
-    resume_skills = data.get('resume_skills', [])
+@app.route('/admin/update_flags', methods=['POST'])
+def update_feature_flags():
+    if not session.get('admin_authed'): return jsonify({'error': 'Unauthorized'}), 401
+    Database.db.config.update_one({'_id': 'features'}, {'$set': request.json}, upsert=True)
+    return jsonify({'success': True})
+
+@app.route('/admin/recent_activity')
+def recent_activity():
+    if not session.get('admin_authed'): return jsonify({'error': 'Unauthorized'}), 401
+    # Assuming ObjectId contains timestamp, sort by _id descending
+    users = Database.db.users.find().sort('_id', -1).limit(5)
+    res = []
+    for u in users:
+        # manual timestamp extraction from objectid
+        ts = u['_id'].generation_time
+        res.append({
+            'username': u['username'],
+            'joined_at': ts.strftime('%Y-%m-%d %I:%M %p').lower()
+        })
+    return jsonify(res)
+
+# --- SocketIO Events ---
+
+@app.route('/block_user', methods=['POST'])
+@login_required
+def block_user():
+    target_id = request.form.get('target_id')
+    if not target_id:
+        return jsonify({'success': False, 'message': 'Target ID required'}), 400
     
-    result = calculate_skills_percentage(job_skills, resume_skills)
+    # 1. Add to blocked list
+    Database.db.users.update_one(
+        {'_id': ObjectId(current_user.id)},
+        {'$addToSet': {'blocked_users': target_id}}
+    )
     
-    return jsonify({
-        'success': True,
-        'input': {
-            'job_skills': job_skills,
-            'resume_skills': resume_skills
-        },
-        'result': result
+    # 2. Remove from connections (for both)
+    Database.db.users.update_one(
+        {'_id': ObjectId(current_user.id)},
+        {'$pull': {'connections': target_id}}
+    )
+    Database.db.users.update_one(
+        {'_id': ObjectId(target_id)},
+        {'$pull': {'connections': current_user.id}}
+    )
+    
+    return jsonify({'success': True, 'message': 'User blocked'})
+
+@app.route('/unblock_user', methods=['POST'])
+@login_required
+def unblock_user():
+    target_id = request.form.get('target_id')
+    if not target_id:
+        return jsonify({'success': False, 'message': 'Target ID required'}), 400
+    
+    # Remove from blocked list
+    Database.db.users.update_one(
+        {'_id': ObjectId(current_user.id)},
+        {'$pull': {'blocked_users': target_id}}
+    )
+    
+    return jsonify({'success': True, 'message': 'User unblocked'})
+
+@socketio.on('private_message')
+def handle_private_message(data):
+    receiver_id = data.get('receiver_id')
+    message_text = data.get('message')
+    
+    if not receiver_id or (not message_text and not data.get('file_url')): return
+
+    # Check for blocking
+    me = Database.db.users.find_one({'_id': ObjectId(current_user.id)})
+    them = Database.db.users.find_one({'_id': ObjectId(receiver_id)})
+    
+    if not them: return # Invalid target
+    
+    # Case: I blocked them OR They blocked me
+    blocked_by_me = receiver_id in me.get('blocked_users', [])
+    blocked_by_them = current_user.id in them.get('blocked_users', [])
+    
+    if blocked_by_me or blocked_by_them:
+        # Silently fail or send error back to user
+        emit('error', {'message': 'Message could not be sent. You may have been blocked or you have blocked this user.'})
+        return
+
+    # 1. Handle VAANI AI Bot
+    if receiver_id == 'vaani_ai_bot':
+        config = Database.db.config.find_one({'_id': 'features'}) or {}
+        if config.get('ai_bot', True):
+            # Save User Message to Bot
+            user_msg = {
+                'sender_id': current_user.id,
+                'receiver_id': 'vaani_ai_bot',
+                'message': message_text,
+                'timestamp': datetime.now(timezone.utc),
+                'read': True,
+                'file_url': data.get('file_url'),
+                'file_type': data.get('file_type')
+            }
+            Database.db.messages.insert_one(user_msg)
+
+            # Immediate confirmation back to sender
+            user_msg_payload = {
+                '_id': str(user_msg['_id']),
+                'temp_id': data.get('temp_id'),
+                'sender_id': current_user.id,
+                'receiver_id': 'vaani_ai_bot',
+                'message': message_text,
+                'timestamp': user_msg['timestamp'].isoformat(),
+                'sender_name': current_user.username,
+                'sender_pic': current_user.profile_pic,
+                'file_url': user_msg.get('file_url'),
+                'file_type': user_msg.get('file_type'),
+                'read': True
+            }
+            emit('new_private_message', user_msg_payload, room=current_user.id)
+
+            # If it's just a file (like voice), AI might want to say something
+            process_msg = message_text
+            if not process_msg and data.get('file_url'):
+                process_msg = "(User sent a voice/file message)"
+
+            # Show AI is typing
+            emit('display_typing', {'username': 'VAANI (AI)', 'sender_id': 'vaani_ai_bot'}, room=current_user.id)
+            
+            def process_ai_reply(user_msg_text, user_id):
+                try:
+                    from bot import get_ai_response
+                    ai_reply = get_ai_response(user_msg_text)
+                except Exception as e:
+                    print(f"AI ERROR: {e}")
+                    ai_reply = "I'm having trouble processing that right now."
+
+                # Save AI Reply to DB
+                ai_msg = {
+                    'sender_id': 'vaani_ai_bot',
+                    'receiver_id': user_id,
+                    'message': ai_reply,
+                    'timestamp': datetime.now(timezone.utc),
+                    'read': False
+                }
+                Database.db.messages.insert_one(ai_msg)
+
+                # Emit AI Reply back to the user
+                reply_data = {
+                    '_id': str(ai_msg['_id']),
+                    'sender_id': 'vaani_ai_bot',
+                    'message': ai_reply,
+                    'timestamp': ai_msg['timestamp'].isoformat(),
+                    'sender_name': 'VAANI (AI)',
+                    'sender_pic': '/static/img/VAANI AI.png'
+                }
+                socketio.emit('new_private_message', reply_data, room=user_id)
+                # Hide AI typing
+                socketio.emit('hide_typing', {'sender_id': 'vaani_ai_bot'}, room=user_id)
+            
+            # Run AI in background
+            socketio.start_background_task(process_ai_reply, message_text, current_user.id)
+        return
+
+    # 2. Handle Real User Message
+    msg = {
+        'sender_id': current_user.id,
+        'receiver_id': receiver_id,
+        'message': message_text or "",
+        'timestamp': datetime.now(timezone.utc),
+        'read': False,
+        'file_url': data.get('file_url'),
+        'file_type': data.get('file_type')
+    }
+    Database.db.messages.insert_one(msg)
+    
+    payload = {
+        '_id': str(msg['_id']),
+        'temp_id': data.get('temp_id'),
+        'sender_id': current_user.id,
+        'receiver_id': receiver_id,
+        'message': msg['message'],
+        'timestamp': msg['timestamp'].isoformat(),
+        'sender_name': current_user.username,
+        'sender_pic': current_user.profile_pic,
+        'file_url': msg.get('file_url'),
+        'file_type': msg.get('file_type'),
+        'read': False
+    }
+    
+    # Emit to receiver
+    emit('new_private_message', payload, room=receiver_id)
+    # Emit to sender (for multi-device sync and ID confirmation)
+    emit('new_private_message', payload, room=current_user.id)
+
+@socketio.on('typing')
+def handle_typing(data):
+    room = data.get('room')
+    if room == 'global_lounge':
+        emit('display_typing', {'username': current_user.username, 'room': 'global_lounge'}, room='global_lounge', include_self=False)
+    elif room:
+        # Private chat typing: emit to the RECEIVER's room
+        emit('display_typing', {'username': current_user.username, 'sender_id': current_user.id}, room=room)
+
+@socketio.on('stop_typing')
+def handle_stop_typing(data):
+    room = data.get('room')
+    if room == 'global_lounge':
+        emit('hide_typing', {'room': 'global_lounge'}, room='global_lounge', include_self=False)
+    elif room:
+        emit('hide_typing', {'sender_id': current_user.id}, room=room)
+
+@socketio.on('admin_announcement')
+def handle_admin_announcement(data):
+    # In a real app, verify session['admin_authed'] here too via socket session
+    # For now, we trust the obscure admin path + pin, but ideally we check session
+    emit('global_announcement', data, broadcast=True)
+
+
+
+@socketio.on('connect')
+def handle_connect():
+    if current_user.is_authenticated:
+        Database.db.users.update_one({'_id': ObjectId(current_user.id)}, {'$set': {'online': True}})
+        join_room(current_user.id)
+        # Join Global Room
+        join_room('global_lounge')
+        
+        # Calculate total online count
+        online_count = Database.db.users.count_documents({'online': True})
+        emit('user_status', {'user_id': current_user.id, 'status': 'online', 'online_count': online_count}, broadcast=True)
+        
+        # Send current global theme
+        config = Database.db.config.find_one({'_id': 'global_theme'})
+        if config:
+            emit('theme_change', {
+                'theme': config.get('theme', 'default'),
+                'colors': config.get('colors')
+            })
+            
+        # Send Wallpaper
+        wallpaper_config = Database.db.config.find_one({'_id': 'wallpaper'})
+        if wallpaper_config:
+            emit('wallpaper_change', {'wallpaper': wallpaper_config.get('url', 'none')})
+
+@socketio.on('global_message')
+def handle_global_message(data):
+    message_text = data['message']
+    
+    # --- Feature: Magic GIFs ---
+    if message_text.startswith('/gif '):
+        query = message_text.split(' ', 1)[1]
+        # Using a public search endpoint or mock for demo
+        # For reliability without API key, we'll use a simple image placeholder with text or a known gif provider search 
+        # Actually, let's use Tenor's unknown random or just a direct GIPHY search embed if possible.
+        # Safer: Use a predictable source like specific fun GIFs or just Unsplash for "Magic Image"
+        message_text = f'<img src="https://source.unsplash.com/random/300x200?{query}" style="border-radius:10px; max-width:100%;">'
+        
+    # --- Feature: Confetti Keywords ---
+    if any(word in message_text.lower() for word in ['congrats', 'congratulations', 'happy birthday', 'party', 'celebrate']):
+        socketio.emit('trigger_effect', {'type': 'confetti'})
+
+    message_data = {
+        'sender_id': current_user.id,
+        'sender_name': current_user.username,
+        'sender_pic': current_user.profile_pic,
+        'message': message_text,
+        'timestamp': datetime.now(timezone.utc),
+        'type': 'global'
+    }
+    
+    # Save to Global DB
+    inserted_id = Database.db.global_messages.insert_one(message_data).inserted_id
+    message_data['_id'] = str(inserted_id)
+    message_data['timestamp'] = message_data['timestamp'].isoformat()
+    
+    emit('new_global_message', message_data, room='global_lounge')
+    
+    # AI Logic removed from global chat per user request
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    if current_user.is_authenticated:
+        now = datetime.now(timezone.utc)
+        Database.db.users.update_one({'_id': ObjectId(current_user.id)}, {'$set': {'online': False, 'last_seen': now}})
+        last_seen_str = now.isoformat()
+        
+        leave_room('global_lounge')
+        
+        # Calculate total online count
+        online_count = Database.db.users.count_documents({'online': True})
+        emit('user_status', {'user_id': current_user.id, 'status': 'offline', 'online_count': online_count}, broadcast=True)
+        emit('update_last_seen', {'user_id': current_user.id, 'last_seen': last_seen_str}, broadcast=True)
+
+        # Notify friends that location sharing stopped (if they were watching)
+        connections = Database.db.users.find_one({'_id': ObjectId(current_user.id)}).get('connections', [])
+        for friend_id in connections:
+             emit('friend_stopped_sharing', {'user_id': current_user.id}, room=friend_id)
+
+@socketio.on('add_reaction')
+def handle_add_reaction(data):
+    message_id = data.get('message_id')
+    emoji = data.get('emoji')
+    receiver_id = data.get('receiver_id')
+    is_global = data.get('is_global', False)
+    
+    collection = Database.db.global_messages if is_global else Database.db.messages
+    
+    # Update reactions in DB (using a set to prevent duplicates)
+    collection.update_one(
+        {'_id': ObjectId(message_id)},
+        {'$addToSet': {f'reactions.{emoji}': current_user.id}}
+    )
+    
+    reaction_data = {
+        'message_id': message_id,
+        'emoji': emoji,
+        'user_id': current_user.id,
+        'username': current_user.username
+    }
+    
+    if is_global:
+        emit('reaction_update', reaction_data, room='global_lounge')
+    else:
+        emit('reaction_update', reaction_data, room=receiver_id)
+        emit('reaction_update', reaction_data, room=current_user.id)
+
+@socketio.on('mark_read')
+def handle_mark_read(data):
+    sender_id = data.get('sender_id')
+    Database.db.messages.update_many(
+        {'sender_id': sender_id, 'receiver_id': current_user.id, 'read': False},
+        {'$set': {'read': True}}
+    )
+    emit('messages_read', {'reader_id': current_user.id}, room=sender_id)
+
+@socketio.on('delete_message')
+def handle_delete_message(data):
+    message_id = data.get('message_id')
+    receiver_id = data.get('receiver_id')
+    is_global = data.get('is_global', False)
+    
+    collection = Database.db.global_messages if is_global else Database.db.messages
+    
+    msg = collection.find_one({'_id': ObjectId(message_id)})
+    if msg and msg['sender_id'] == current_user.id:
+        collection.delete_one({'_id': ObjectId(message_id)})
+        
+        event_data = {'message_id': message_id}
+        if is_global:
+            emit('message_deleted', event_data, room='global_lounge')
+        else:
+            emit('message_deleted', event_data, room=receiver_id)
+            emit('message_deleted', event_data, room=current_user.id)
+
+@socketio.on('start_sharing_location')
+def handle_start_sharing():
+    # Update DB state
+    Database.db.users.update_one(
+        {'_id': ObjectId(current_user.id)},
+        {'$set': {'is_sharing': True}}
+    )
+
+@socketio.on('stop_sharing_location')
+def handle_stop_sharing():
+    # Update DB state
+    Database.db.users.update_one(
+        {'_id': ObjectId(current_user.id)},
+        {'$set': {'is_sharing': False}}
+    )
+
+    # Notify all connected friends that I stopped sharing
+    user_data = Database.db.users.find_one({'_id': ObjectId(current_user.id)})
+    connections = user_data.get('connections', [])
+    
+    for friend_id in connections:
+        emit('friend_stopped_sharing', {'user_id': current_user.id}, room=friend_id)
+
+@socketio.on('update_location')
+def handle_location_update(data):
+    lat = data.get('lat')
+    lng = data.get('lng')
+    
+    if not lat or not lng: return
+
+    # 1. Update User Document with latest location
+    Database.db.users.update_one(
+        {'_id': ObjectId(current_user.id)},
+        {'$set': {
+            'location': {'lat': lat, 'lng': lng},
+            'is_sharing': True,
+            'last_location_update': datetime.now(timezone.utc)
+        }}
+    )
+
+    # 2. Broadcast to connected friends
+    payload = {
+        'user_id': current_user.id,
+        'username': current_user.username,
+        'profile_pic': current_user.profile_pic,
+        'lat': lat,
+        'lng': lng
+    }
+
+    user_data = Database.db.users.find_one({'_id': ObjectId(current_user.id)})
+    connections = user_data.get('connections', [])
+    
+    for friend_id in connections:
+        emit('friend_location_update', payload, room=friend_id)
+
+@socketio.on('request_active_locations')
+def handle_request_active_locations():
+    # Fetch all connections who are currently sharing location
+    user_data = Database.db.users.find_one({'_id': ObjectId(current_user.id)})
+    connections = user_data.get('connections', [])
+    
+    if not connections:
+        return
+        
+    connection_ids = [ObjectId(uid) for uid in connections if uid and uid != 'null']
+    
+    # Find friends who are online AND sharing
+    active_friends = Database.db.users.find({
+        '_id': {'$in': connection_ids},
+        'is_sharing': True,
+        'online': True, # Optional: double check they are online
+        'location': {'$exists': True}
     })
+    
+    for friend in active_friends:
+        emit('friend_location_update', {
+            'user_id': str(friend['_id']),
+            'username': friend['username'],
+            'profile_pic': friend.get('profile_pic'),
+            'lat': friend['location']['lat'],
+            'lng': friend['location']['lng']
+        }, room=current_user.id)
+
+@socketio.on('set_meetup')
+def handle_set_meetup(data):
+    lat = data.get('lat')
+    lng = data.get('lng')
+    
+    if not lat or not lng: return
+    
+    # Broadcast to all connected friends
+    user_data = Database.db.users.find_one({'_id': ObjectId(current_user.id)})
+    connections = user_data.get('connections', [])
+    
+    payload = {
+        'lat': lat,
+        'lng': lng,
+        'set_by': current_user.username
+    }
+    
+    # Send to self
+    emit('meetup_set', payload, room=current_user.id)
+    
+    # Send to friends
+    for friend_id in connections:
+        emit('meetup_set', payload, room=friend_id)
+
+@socketio.on('add_map_story')
+def handle_add_map_story(data):
+    content = data.get('content')
+    visibility = data.get('visibility', 'public') # 'public' or 'friends'
+    lat = data.get('lat')
+    lng = data.get('lng')
+
+    if not content or not lat or not lng: return
+
+    story = {
+        'user_id': current_user.id,
+        'username': current_user.username,
+        'profile_pic': current_user.profile_pic,
+        'content': content,
+        'lat': lat,
+        'lng': lng,
+        'visibility': visibility,
+        'timestamp': datetime.now(timezone.utc),
+        'expires_at': datetime.now(timezone.utc) + timedelta(hours=24) # 24h Expiry
+    }
+
+    # Save to MongoDB
+    inserted_id = Database.db.map_stories.insert_one(story).inserted_id
+    
+    # Prepare payload
+    payload = story.copy()
+    payload['story_id'] = str(inserted_id)
+    del payload['_id']
+    payload['timestamp'] = payload['timestamp'].isoformat()
+    del payload['expires_at']
+
+    # Broadcast based on visibility
+    if visibility == 'public':
+        # Send to everyone including self
+        emit('new_map_story', payload, broadcast=True, include_self=True)
+    else:
+        # Friends Only
+        # Send to self
+        emit('new_map_story', payload, room=current_user.id)
+        
+        # Send to friends
+        user_data = Database.db.users.find_one({'_id': ObjectId(current_user.id)})
+        connections = user_data.get('connections', [])
+        for friend_id in connections:
+            emit('new_map_story', payload, room=friend_id)
+
+@socketio.on('request_map_stories')
+def handle_request_map_stories():
+    now = datetime.now(timezone.utc)
+    
+    # 1. Get ALL Public Stories (not expired)
+    public_stories = list(Database.db.map_stories.find({
+        'visibility': 'public', 
+        'expires_at': {'$gt': now}
+    }))
+
+    # 2. Get Friends' Stories
+    user_data = Database.db.users.find_one({'_id': ObjectId(current_user.id)})
+    connections = user_data.get('connections', [])
+    
+    friends_stories = list(Database.db.map_stories.find({
+        'visibility': 'friends',
+        'user_id': {'$in': connections}, # Stories from friends
+        'expires_at': {'$gt': now}
+    }))
+    
+    # 3. Get MY Stories (even if friends-only)
+    my_stories = list(Database.db.map_stories.find({
+        'user_id': current_user.id,
+        'visibility': 'friends', # Public ones already covered
+        'expires_at': {'$gt': now}
+    }))
+
+    all_stories = public_stories + friends_stories + my_stories
+    
+    # Deduplicate by ID just in case
+    seen_ids = set()
+    unique_stories = []
+    for s in all_stories:
+        sid = str(s['_id'])
+        if sid not in seen_ids:
+            seen_ids.add(sid)
+            s['story_id'] = sid
+            del s['_id']
+            s['timestamp'] = s['timestamp'].isoformat()
+            if 'expires_at' in s: del s['expires_at']
+            unique_stories.append(s)
+
+    # Emit back to requester
+    for s in unique_stories:
+        emit('new_map_story', s)
 
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
-    app.run(debug=False, host='0.0.0.0', port=port)
+    if not os.path.exists(app.config['UPLOAD_FOLDER']):
+        os.makedirs(app.config['UPLOAD_FOLDER'])
+    socketio.run(app, debug=True)
