@@ -1,4 +1,4 @@
-const CACHE_NAME = 'resume-ai-v1';
+const CACHE_NAME = 'resume-ai-v2';
 const ASSETS_TO_CACHE = [
   '/',
   '/static/manifest.json',
