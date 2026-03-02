@@ -1,0 +1,11 @@
+{
+  "name": "resume-shortlisting-mailer",
+  "version": "1.0.0",
+  "description": "NodeMailer utility for Resume Shortlisting Using AI",
+  "private": true,
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "nodemailer": "^6.10.1"
+  }
+}

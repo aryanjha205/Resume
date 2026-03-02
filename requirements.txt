@@ -1,0 +1,10 @@
+flask==3.0.0
+pymongo==4.6.1
+werkzeug==3.0.1
+scikit-learn
+numpy
+PyPDF2==3.0.1
+python-docx==0.8.11
+requests==2.31.0
+gunicorn==21.2.0
+python-dotenv==1.0.0

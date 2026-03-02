@@ -1,0 +1,2022 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resume Shortlisting Using AI - Intelligent Applicant Tracking System</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-navy: #1a2332;
+            --secondary-navy: #2d3e50;
+            --accent-teal: #17a2b8;
+            --success-green: #28a745;
+            --warm-gray: #f8f9fa;
+            --text-dark: #333333;
+            --border-light: #e0e0e0;
+            --shadow: 0 2px 8px rgba(0,0,0,0.1);
+            --shadow-lg: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--warm-gray);
+            color: var(--text-dark);
+            overflow-x: hidden;
+        }
+        
+        /* Landing Page Styles */
+        .landing-page {
+            min-height: 100vh;
+            background: linear-gradient(135deg, var(--primary-navy) 0%, var(--secondary-navy) 100%);
+        }
+        
+        .navbar-custom {
+            background: rgba(26, 35, 50, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding: 1rem 0;
+        }
+        
+        .navbar-brand {
+            color: white !important;
+            font-size: 1.5rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .navbar-brand i {
+            color: var(--accent-teal);
+            font-size: 1.8rem;
+        }
+        
+        .hero-section {
+            padding: 100px 0 80px;
+            text-align: center;
+            color: white;
+        }
+        
+        .hero-title {
+            font-size: 3.5rem;
+            font-weight: 800;
+            margin-bottom: 1.5rem;
+            animation: fadeInUp 0.8s ease;
+        }
+        
+        .hero-subtitle {
+            font-size: 1.3rem;
+            color: rgba(255,255,255,0.9);
+            margin-bottom: 2.5rem;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+            animation: fadeInUp 0.8s ease 0.2s;
+            animation-fill-mode: both;
+        }
+        
+        .cta-buttons {
+            display: flex;
+            gap: 1.5rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            animation: fadeInUp 0.8s ease 0.4s;
+            animation-fill-mode: both;
+        }
+        
+        .btn-cta {
+            padding: 15px 40px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-cta-primary {
+            background: var(--accent-teal);
+            color: white;
+            box-shadow: 0 4px 15px rgba(23, 162, 184, 0.3);
+        }
+        
+        .btn-cta-primary:hover {
+            background: #138496;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(23, 162, 184, 0.4);
+        }
+        
+        .btn-cta-secondary {
+            background: white;
+            color: var(--primary-navy);
+            box-shadow: 0 4px 15px rgba(255, 255, 255, 0.2);
+        }
+        
+        .btn-cta-secondary:hover {
+            background: #f8f9fa;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 255, 255, 0.3);
+        }
+        
+        .stats-section {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            padding: 40px 0;
+            margin-top: 60px;
+            border-top: 1px solid rgba(255,255,255,0.2);
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .stat-item {
+            text-align: center;
+            color: white;
+            animation: countUp 2s ease;
+        }
+        
+        .stat-number {
+            font-size: 3rem;
+            font-weight: 800;
+            color: var(--accent-teal);
+            display: block;
+        }
+        
+        .stat-label {
+            font-size: 1rem;
+            opacity: 0.9;
+            margin-top: 0.5rem;
+        }
+        
+        .features-section {
+            padding: 80px 0;
+            background: white;
+        }
+        
+        .section-title {
+            text-align: center;
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 3rem;
+            color: var(--primary-navy);
+        }
+        
+        .feature-card {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: var(--shadow);
+            transition: all 0.3s ease;
+            height: 100%;
+            border: 1px solid var(--border-light);
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .feature-icon {
+            width: 70px;
+            height: 70px;
+            background: linear-gradient(135deg, var(--accent-teal), #20c997);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1.5rem;
+            color: white;
+            font-size: 2rem;
+        }
+        
+        .feature-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: var(--primary-navy);
+        }
+        
+        .feature-description {
+            color: #666;
+            line-height: 1.6;
+        }
+        
+        /* Authentication Modals */
+        .auth-modal {
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(5px);
+        }
+        
+        .modal-content {
+            border-radius: 12px;
+            border: none;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        
+        .modal-header {
+            background: linear-gradient(135deg, var(--primary-navy), var(--secondary-navy));
+            color: white;
+            border-radius: 12px 12px 0 0;
+            border-bottom: none;
+        }
+        
+        .form-control:focus {
+            border-color: var(--accent-teal);
+            box-shadow: 0 0 0 0.2rem rgba(23, 162, 184, 0.25);
+        }
+        
+        .role-selector {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .role-option {
+            flex: 1;
+            padding: 1rem;
+            border: 2px solid var(--border-light);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+        
+        .role-option:hover {
+            border-color: var(--accent-teal);
+            background: rgba(23, 162, 184, 0.05);
+        }
+        
+        .role-option.active {
+            border-color: var(--accent-teal);
+            background: var(--accent-teal);
+            color: white;
+        }
+        
+        /* Dashboard Styles */
+        .dashboard {
+            min-height: 100vh;
+            background: var(--warm-gray);
+        }
+        
+        .dashboard-header {
+            background: white;
+            border-bottom: 2px solid var(--border-light);
+            padding: 1rem 0;
+            box-shadow: var(--shadow);
+        }
+        
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .user-avatar {
+            width: 45px;
+            height: 45px;
+            background: var(--accent-teal);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            font-size: 1.2rem;
+        }
+        
+        .dashboard-nav {
+            background: white;
+            padding: 0;
+            margin-bottom: 2rem;
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            overflow: hidden;
+        }
+        
+        .dashboard-nav .nav-link {
+            padding: 1rem 1.5rem;
+            color: var(--text-dark);
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s ease;
+        }
+        
+        .dashboard-nav .nav-link:hover {
+            background: var(--warm-gray);
+        }
+        
+        .dashboard-nav .nav-link.active {
+            color: var(--accent-teal);
+            border-bottom-color: var(--accent-teal);
+            background: rgba(23, 162, 184, 0.05);
+        }
+        
+        .dashboard-card {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: var(--shadow);
+            margin-bottom: 2rem;
+            border: 1px solid var(--border-light);
+        }
+        
+        .card-header-custom {
+            background: linear-gradient(135deg, var(--primary-navy), var(--secondary-navy));
+            color: white;
+            padding: 1rem 1.5rem;
+            border-radius: 8px 8px 0 0;
+            margin: -2rem -2rem 1.5rem;
+            font-size: 1.3rem;
+            font-weight: 600;
+        }
+        
+        .skill-tag {
+            display: inline-block;
+            background: linear-gradient(135deg, var(--accent-teal), #20c997);
+            color: white;
+            padding: 0.4rem 0.8rem;
+            border-radius: 20px;
+            margin: 0.3rem;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+        
+        .job-card {
+            background: white;
+            border: 1px solid var(--border-light);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .job-card:hover {
+            box-shadow: var(--shadow-lg);
+            transform: translateY(-2px);
+        }
+        
+        .job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 1rem;
+        }
+        
+        .job-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: var(--primary-navy);
+            margin-bottom: 0.5rem;
+        }
+        
+        .job-company {
+            color: #666;
+            font-size: 0.95rem;
+        }
+        
+        .match-meter {
+            text-align: center;
+            min-width: 100px;
+        }
+        
+        .match-circle {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 0.5rem;
+            font-size: 1.5rem;
+            font-weight: 700;
+            position: relative;
+            background: conic-gradient(var(--accent-teal) 0%, var(--accent-teal) var(--match-percent), #e0e0e0 var(--match-percent), #e0e0e0 100%);
+        }
+        
+        .match-circle::before {
+            content: '';
+            position: absolute;
+            width: 65px;
+            height: 65px;
+            background: white;
+            border-radius: 50%;
+        }
+        
+        .match-value {
+            position: relative;
+            z-index: 1;
+            color: var(--primary-navy);
+        }
+        
+        .match-label {
+            font-size: 0.8rem;
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .progress-custom {
+            height: 8px;
+            border-radius: 10px;
+            background: #e0e0e0;
+            overflow: hidden;
+        }
+        
+        .progress-bar-custom {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-teal), #20c997);
+            border-radius: 10px;
+            transition: width 0.6s ease;
+        }
+        
+        .status-badge {
+            padding: 0.4rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        
+        .status-applied {
+            background: #ffc107;
+            color: #000;
+        }
+        
+        .status-shortlisted {
+            background: #17a2b8;
+            color: white;
+        }
+        
+        .status-selected {
+            background: #28a745;
+            color: white;
+        }
+        
+        .status-rejected {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .status-hired {
+            background: #6f42c1;
+            color: white;
+        }
+        
+        /* Assessment Styles */
+        .assessment-container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        
+        .timer-display {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            background: var(--primary-navy);
+            color: white;
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            font-size: 1.2rem;
+            font-weight: 700;
+            box-shadow: var(--shadow-lg);
+            z-index: 1000;
+        }
+        
+        .timer-warning {
+            background: #dc3545;
+            animation: pulse 1s infinite;
+        }
+        
+        .question-card {
+            background: white;
+            border: 2px solid var(--border-light);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        
+        .question-number {
+            display: inline-block;
+            background: var(--accent-teal);
+            color: white;
+            width: 35px;
+            height: 35px;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 35px;
+            font-weight: 700;
+            margin-right: 1rem;
+        }
+        
+        .question-text {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            color: var(--primary-navy);
+        }
+        
+        .option-item {
+            background: var(--warm-gray);
+            border: 2px solid var(--border-light);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 0.8rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .option-item:hover {
+            border-color: var(--accent-teal);
+            background: rgba(23, 162, 184, 0.05);
+        }
+        
+        .option-item input[type="radio"] {
+            margin-right: 1rem;
+        }
+        
+        .option-item.selected {
+            border-color: var(--accent-teal);
+            background: rgba(23, 162, 184, 0.1);
+        }
+        
+        .notification-badge {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background: #dc3545;
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            font-size: 0.7rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+        }
+        
+        .notification-item {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-light);
+            transition: background 0.3s ease;
+        }
+        
+        .notification-item:hover {
+            background: var(--warm-gray);
+        }
+        
+        .notification-item.unread {
+            background: rgba(23, 162, 184, 0.05);
+            border-left: 3px solid var(--accent-teal);
+        }
+        
+        .applicant-row {
+            background: white;
+            border: 1px solid var(--border-light);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            transition: all 0.3s ease;
+        }
+        
+        .applicant-row:hover {
+            box-shadow: var(--shadow);
+        }
+        
+        /* Animations */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        @keyframes countUp {
+            from {
+                opacity: 0;
+                transform: scale(0.5);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+        
+        @keyframes pulse {
+            0%, 100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.05);
+            }
+        }
+        
+        @keyframes slideIn {
+            from {
+                transform: translateX(-100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        .btn-primary-custom {
+            background: linear-gradient(135deg, var(--accent-teal), #20c997);
+            border: none;
+            padding: 0.6rem 1.5rem;
+            border-radius: 6px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-primary-custom:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(23, 162, 184, 0.3);
+        }
+        
+        .btn-outline-custom {
+            border: 2px solid var(--accent-teal);
+            color: var(--accent-teal);
+            padding: 0.6rem 1.5rem;
+            border-radius: 6px;
+            font-weight: 600;
+            background: transparent;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-outline-custom:hover {
+            background: var(--accent-teal);
+            color: white;
+        }
+        
+        .hidden {
+            display: none !important;
+        }
+        
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .upload-zone {
+            border: 2px dashed var(--border-light);
+            border-radius: 12px;
+            padding: 3rem;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .upload-zone:hover {
+            border-color: var(--accent-teal);
+            background: rgba(23, 162, 184, 0.05);
+        }
+        
+        .upload-zone.dragover {
+            border-color: var(--accent-teal);
+            background: rgba(23, 162, 184, 0.1);
+        }
+        
+        @media (max-width: 768px) {
+            .hero-title {
+                font-size: 2.5rem;
+            }
+            
+            .hero-subtitle {
+                font-size: 1.1rem;
+            }
+            
+            .cta-buttons {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .stat-number {
+                font-size: 2rem;
+            }
+            
+            .timer-display {
+                position: static;
+                margin-bottom: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Landing Page -->
+<div id="landingPage" class="landing-page">
+    <nav class="navbar navbar-expand-lg navbar-custom">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-brain"></i>
+                <span>Resume Shortlisting Using AI</span>
+            </a>
+        </div>
+    </nav>
+    
+    <section class="hero-section">
+        <div class="container">
+            <h1 class="hero-title">Hire Smarter with AI-Powered Recruitment</h1>
+            <p class="hero-subtitle">
+                Transform your hiring process with intelligent resume screening, automated skill matching, 
+                and AI-driven candidate assessments. Find the perfect talent faster than ever.
+            </p>
+            
+            <div class="cta-buttons">
+                <button class="btn-cta btn-cta-primary" onclick="showAuthModal('register', 'candidate')">
+                    <i class="fas fa-user-plus"></i> Get Started as Candidate
+                </button>
+                <button class="btn-cta btn-cta-secondary" onclick="showAuthModal('register', 'recruiter')">
+                    <i class="fas fa-briefcase"></i> Hire as Recruiter
+                </button>
+            </div>
+        </div>
+        
+        <div class="stats-section">
+            <div class="container">
+                <div class="row">
+                    <div class="col-md-3 col-6">
+                        <div class="stat-item">
+                            <span class="stat-number" id="statJobs">0</span>
+                            <div class="stat-label">Active Jobs</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-6">
+                        <div class="stat-item">
+                            <span class="stat-number" id="statCandidates">0</span>
+                            <div class="stat-label">Registered Candidates</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-6">
+                        <div class="stat-item">
+                            <span class="stat-number" id="statApplications">0</span>
+                            <div class="stat-label">Applications Processed</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-6">
+                        <div class="stat-item">
+                            <span class="stat-number" id="statCompanies">0</span>
+                            <div class="stat-label">Companies Hiring</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <section class="features-section">
+        <div class="container">
+            <h2 class="section-title">Why Choose Our Platform?</h2>
+            <div class="row">
+                <div class="col-md-4 mb-4">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-robot"></i>
+                        </div>
+                        <h3 class="feature-title">AI-Powered Matching</h3>
+                        <p class="feature-description">
+                            Advanced NLP algorithms extract skills and calculate match scores using cosine similarity, 
+                            ensuring you find the best candidates automatically.
+                        </p>
+                    </div>
+                </div>
+                <div class="col-md-4 mb-4">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-check-double"></i>
+                        </div>
+                        <h3 class="feature-title">Auto Shortlisting</h3>
+                        <p class="feature-description">
+                            Candidates with 60%+ match score are automatically shortlisted, saving recruiters 
+                            countless hours of manual screening.
+                        </p>
+                    </div>
+                </div>
+                <div class="col-md-4 mb-4">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-clipboard-check"></i>
+                        </div>
+                        <h3 class="feature-title">Smart Assessments</h3>
+                        <p class="feature-description">
+                            Timed MCQ assessments are auto-generated based on job requirements with instant 
+                            evaluation and scoring.
+                        </p>
+                    </div>
+                </div>
+                <div class="col-md-4 mb-4">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-chart-line"></i>
+                        </div>
+                        <h3 class="feature-title">Real-time Analytics</h3>
+                        <p class="feature-description">
+                            Track application progress, view match scores, and receive instant notifications 
+                            when candidates pass assessments.
+                        </p>
+                    </div>
+                </div>
+                <div class="col-md-4 mb-4">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-file-pdf"></i>
+                        </div>
+                        <h3 class="feature-title">Resume Parsing</h3>
+                        <p class="feature-description">
+                            Automatically extract skills from PDF and DOCX resumes using advanced text 
+                            processing and AI technology.
+                        </p>
+                    </div>
+                </div>
+                <div class="col-md-4 mb-4">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-shield-alt"></i>
+                        </div>
+                        <h3 class="feature-title">Secure & Scalable</h3>
+                        <p class="feature-description">
+                            Built on MongoDB Atlas with role-based access control, ensuring your data 
+                            is safe and the platform scales with your needs.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<!-- Authentication Modals -->
+<div class="modal fade auth-modal" id="authModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="authModalTitle">Sign In</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="authForm">
+                    <div id="registerFields" class="hidden">
+                        <div class="mb-3">
+                            <label class="form-label">Full Name</label>
+                            <input type="text" class="form-control" id="registerName" placeholder="Enter your name">
+                        </div>
+                        
+                        <div class="role-selector" id="roleSelector">
+                            <div class="role-option" data-role="candidate">
+                                <i class="fas fa-user fa-2x mb-2"></i>
+                                <div>Candidate</div>
+                            </div>
+                            <div class="role-option" data-role="recruiter">
+                                <i class="fas fa-briefcase fa-2x mb-2"></i>
+                                <div>Recruiter</div>
+                            </div>
+                        </div>
+                        <input type="hidden" id="userRole" value="candidate">
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Email Address</label>
+                        <input type="email" class="form-control" id="authEmail" placeholder="Enter your email" required>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input type="password" class="form-control" id="authPassword" placeholder="Enter your password" required>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary-custom w-100">
+                        <span id="authButtonText">Sign In</span>
+                    </button>
+                </form>
+                
+                <div class="text-center mt-3">
+                    <a href="#" id="toggleAuth" onclick="toggleAuthMode(event)">
+                        <span id="toggleAuthText">Don't have an account? Sign Up</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Candidate Dashboard -->
+<div id="candidateDashboard" class="dashboard hidden">
+    <div class="dashboard-header">
+        <div class="container">
+            <div class="d-flex justify-content-between align-items-center">
+                <div class="user-info">
+                    <div class="user-avatar" id="candidateAvatar">C</div>
+                    <div>
+                        <div class="fw-bold" id="candidateName">Candidate</div>
+                        <small class="text-muted">Candidate Dashboard</small>
+                    </div>
+                </div>
+                <button class="btn btn-outline-custom" onclick="logout()">
+                    <i class="fas fa-sign-out-alt"></i> Logout
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container mt-4">
+        <ul class="nav nav-tabs dashboard-nav">
+            <li class="nav-item">
+                <a class="nav-link active" data-tab="candidateProfile" onclick="switchCandidateTab('candidateProfile')">
+                    <i class="fas fa-user"></i> Profile
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" data-tab="candidateJobs" onclick="switchCandidateTab('candidateJobs')">
+                    <i class="fas fa-briefcase"></i> Browse Jobs
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" data-tab="candidateApplications" onclick="switchCandidateTab('candidateApplications')">
+                    <i class="fas fa-file-alt"></i> My Applications
+                </a>
+            </li>
+        </ul>
+        
+        <!-- Profile Tab -->
+        <div id="candidateProfile" class="tab-content">
+            <div class="dashboard-card">
+                <div class="card-header-custom">
+                    <i class="fas fa-user-circle"></i> My Profile
+                </div>
+                
+                <div id="resumeUploadSection">
+                    <h5 class="mb-3">Upload Your Resume</h5>
+                    <div class="upload-zone" onclick="document.getElementById('resumeFile').click()">
+                        <i class="fas fa-cloud-upload-alt fa-3x mb-3 text-muted"></i>
+                        <p class="mb-2">Click to upload or drag and drop</p>
+                        <small class="text-muted">PDF or DOCX (Max 16MB)</small>
+                    </div>
+                    <input type="file" id="resumeFile" accept=".pdf,.docx,.doc" class="hidden" onchange="uploadResume()">
+                </div>
+                
+                <div id="skillsSection" class="hidden">
+                    <h5 class="mb-3">Extracted Skills</h5>
+                    <div id="candidateSkills"></div>
+                    
+                    <button class="btn btn-outline-custom mt-3" onclick="document.getElementById('resumeFile').click()">
+                        <i class="fas fa-sync"></i> Update Resume
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Jobs Tab -->
+        <div id="candidateJobs" class="tab-content hidden">
+            <div class="dashboard-card">
+                <div class="card-header-custom">
+                    <i class="fas fa-briefcase"></i> Available Jobs
+                </div>
+                <div id="jobsList"></div>
+            </div>
+        </div>
+        
+        <!-- Applications Tab -->
+        <div id="candidateApplications" class="tab-content hidden">
+            <div class="dashboard-card">
+                <div class="card-header-custom">
+                    <i class="fas fa-file-alt"></i> My Applications
+                </div>
+                <div id="applicationsList"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recruiter Dashboard -->
+<div id="recruiterDashboard" class="dashboard hidden">
+    <div class="dashboard-header">
+        <div class="container">
+            <div class="d-flex justify-content-between align-items-center">
+                <div class="user-info">
+                    <div class="user-avatar" id="recruiterAvatar">R</div>
+                    <div>
+                        <div class="fw-bold" id="recruiterName">Recruiter</div>
+                        <small class="text-muted">Recruiter Dashboard</small>
+                    </div>
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-outline-custom position-relative" onclick="switchRecruiterTab('recruiterNotifications')">
+                        <i class="fas fa-bell"></i>
+                        <span class="notification-badge" id="notificationBadge">0</span>
+                    </button>
+                    <button class="btn btn-outline-custom" onclick="logout()">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container mt-4">
+        <ul class="nav nav-tabs dashboard-nav">
+            <li class="nav-item">
+                <a class="nav-link active" data-tab="recruiterJobs" onclick="switchRecruiterTab('recruiterJobs')">
+                    <i class="fas fa-briefcase"></i> My Jobs
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" data-tab="recruiterPostJob" onclick="switchRecruiterTab('recruiterPostJob')">
+                    <i class="fas fa-plus-circle"></i> Post Job
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" data-tab="recruiterNotifications" onclick="switchRecruiterTab('recruiterNotifications')">
+                    <i class="fas fa-bell"></i> Notifications
+                </a>
+            </li>
+        </ul>
+        
+        <!-- My Jobs Tab -->
+        <div id="recruiterJobs" class="tab-content">
+            <div class="dashboard-card">
+                <div class="card-header-custom">
+                    <i class="fas fa-briefcase"></i> Posted Jobs
+                </div>
+                <div id="recruiterJobsList"></div>
+            </div>
+        </div>
+        
+        <!-- Post Job Tab -->
+        <div id="recruiterPostJob" class="tab-content hidden">
+            <div class="dashboard-card">
+                <div class="card-header-custom">
+                    <i class="fas fa-plus-circle"></i> Post New Job
+                </div>
+                
+                <form id="postJobForm" onsubmit="postJob(event)">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Job Title *</label>
+                            <input type="text" class="form-control" id="jobTitle" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Company *</label>
+                            <input type="text" class="form-control" id="jobCompany" required>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Job Description *</label>
+                        <textarea class="form-control" id="jobDescription" rows="4" required></textarea>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Required Skills * (comma-separated)</label>
+                        <input type="text" class="form-control" id="jobSkills" placeholder="Python, JavaScript, React, MongoDB" required>
+                        <small class="text-muted">Enter skills separated by commas</small>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Experience Required</label>
+                            <input type="text" class="form-control" id="jobExperience" placeholder="2-5 years">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Salary Range</label>
+                            <input type="text" class="form-control" id="jobSalary" placeholder="$80,000 - $120,000">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Location</label>
+                            <input type="text" class="form-control" id="jobLocation" placeholder="Remote / New York">
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary-custom">
+                        <i class="fas fa-paper-plane"></i> Post Job
+                    </button>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Notifications Tab -->
+        <div id="recruiterNotifications" class="tab-content hidden">
+            <div class="dashboard-card">
+                <div class="card-header-custom">
+                    <i class="fas fa-bell"></i> Notifications
+                </div>
+                <div id="notificationsList"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Assessment Modal -->
+<div class="modal fade" id="assessmentModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-clipboard-check"></i> Technical Assessment
+                </h5>
+            </div>
+            <div class="modal-body">
+                <div id="timerDisplay" class="timer-display">
+                    <i class="fas fa-clock"></i> <span id="timeRemaining">15:00</span>
+                </div>
+                
+                <div class="alert alert-info">
+                    <strong>Instructions:</strong> You have 15 minutes to complete this assessment. 
+                    Each question has only one correct answer. Your score must be ≥60% to pass.
+                </div>
+                
+                <div id="assessmentQuestions"></div>
+                
+                <button class="btn btn-primary-custom btn-lg w-100" onclick="submitAssessment()">
+                    <i class="fas fa-paper-plane"></i> Submit Assessment
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Job Details Modal -->
+<div class="modal fade" id="jobDetailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="jobDetailsTitle">Job Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="jobDetailsBody"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Applicants Modal -->
+<div class="modal fade" id="applicantsModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="applicantsModalTitle">Applicants</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="applicantsModalBody"></div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+let currentUser = null;
+let authModal, assessmentModal, jobDetailsModal, applicantsModal;
+let assessmentTimer = null;
+let currentAssessment = null;
+
+document.addEventListener('DOMContentLoaded', async function() {
+    authModal = new bootstrap.Modal(document.getElementById('authModal'));
+    assessmentModal = new bootstrap.Modal(document.getElementById('assessmentModal'));
+    jobDetailsModal = new bootstrap.Modal(document.getElementById('jobDetailsModal'));
+    applicantsModal = new bootstrap.Modal(document.getElementById('applicantsModal'));
+    
+    // Role selector
+    document.querySelectorAll('.role-option').forEach(option => {
+        option.addEventListener('click', function() {
+            document.querySelectorAll('.role-option').forEach(o => o.classList.remove('active'));
+            this.classList.add('active');
+            document.getElementById('userRole').value = this.dataset.role;
+        });
+    });
+    
+    // Check authentication
+    await checkAuth();
+    
+    // Load stats
+    loadStats();
+    
+    // Auth form
+    document.getElementById('authForm').addEventListener('submit', handleAuth);
+});
+
+async function checkAuth() {
+    try {
+        const response = await fetch('/api/check-auth');
+        const data = await response.json();
+        
+        if (data.authenticated) {
+            currentUser = data.user;
+            showDashboard();
+        } else {
+            showLanding();
+        }
+    } catch (error) {
+        console.error('Auth check failed:', error);
+        showLanding();
+    }
+}
+
+async function loadStats() {
+    try {
+        const response = await fetch('/api/stats');
+        const data = await response.json();
+        
+        if (data.success) {
+            animateCounter('statJobs', data.stats.total_jobs);
+            animateCounter('statCandidates', data.stats.total_candidates);
+            animateCounter('statApplications', data.stats.total_applications);
+            animateCounter('statCompanies', data.stats.total_companies);
+        }
+    } catch (error) {
+        console.error('Failed to load stats:', error);
+    }
+}
+
+function animateCounter(elementId, target) {
+    const element = document.getElementById(elementId);
+    const duration = 2000;
+    const steps = 60;
+    const increment = target / steps;
+    let current = 0;
+    
+    const timer = setInterval(() => {
+        current += increment;
+        if (current >= target) {
+            element.textContent = target;
+            clearInterval(timer);
+        } else {
+            element.textContent = Math.floor(current);
+        }
+    }, duration / steps);
+}
+
+function showAuthModal(mode, role = 'candidate') {
+    const isRegister = mode === 'register';
+    
+    document.getElementById('authModalTitle').textContent = isRegister ? 'Create Account' : 'Sign In';
+    document.getElementById('registerFields').classList.toggle('hidden', !isRegister);
+    document.getElementById('authButtonText').textContent = isRegister ? 'Sign Up' : 'Sign In';
+    document.getElementById('toggleAuthText').textContent = isRegister ? 
+        'Already have an account? Sign In' : "Don't have an account? Sign Up";
+    
+    if (isRegister) {
+        document.querySelector(`[data-role="${role}"]`).click();
+    }
+    
+    document.getElementById('authForm').reset();
+    authModal.show();
+}
+
+function toggleAuthMode(event) {
+    event.preventDefault();
+    const isRegister = document.getElementById('registerFields').classList.contains('hidden');
+    showAuthModal(isRegister ? 'register' : 'login');
+}
+
+async function handleAuth(event) {
+    event.preventDefault();
+    
+    const isRegister = !document.getElementById('registerFields').classList.contains('hidden');
+    const email = document.getElementById('authEmail').value;
+    const password = document.getElementById('authPassword').value;
+    
+    const payload = { email, password };
+    
+    if (isRegister) {
+        payload.name = document.getElementById('registerName').value;
+        payload.role = document.getElementById('userRole').value;
+    }
+    
+    try {
+        const response = await fetch(`/api/${isRegister ? 'register' : 'login'}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            currentUser = data.user;
+            authModal.hide();
+            showDashboard();
+            showAlert('success', data.message);
+        } else {
+            showAlert('danger', data.message);
+        }
+    } catch (error) {
+        showAlert('danger', 'An error occurred. Please try again.');
+    }
+}
+
+async function logout() {
+    try {
+        await fetch('/api/logout', { method: 'POST' });
+        currentUser = null;
+        showLanding();
+        showAlert('success', 'Logged out successfully');
+    } catch (error) {
+        console.error('Logout failed:', error);
+    }
+}
+
+function showLanding() {
+    document.getElementById('landingPage').classList.remove('hidden');
+    document.getElementById('candidateDashboard').classList.add('hidden');
+    document.getElementById('recruiterDashboard').classList.add('hidden');
+}
+
+function showDashboard() {
+    document.getElementById('landingPage').classList.add('hidden');
+    
+    if (currentUser.role === 'candidate') {
+        document.getElementById('candidateDashboard').classList.remove('hidden');
+        document.getElementById('recruiterDashboard').classList.add('hidden');
+        initCandidateDashboard();
+    } else {
+        document.getElementById('candidateDashboard').classList.add('hidden');
+        document.getElementById('recruiterDashboard').classList.remove('hidden');
+        initRecruiterDashboard();
+    }
+}
+
+async function initCandidateDashboard() {
+    document.getElementById('candidateName').textContent = currentUser.name;
+    document.getElementById('candidateAvatar').textContent = currentUser.name.charAt(0).toUpperCase();
+    
+    switchCandidateTab('candidateProfile');
+}
+
+function switchCandidateTab(tabName) {
+    document.querySelectorAll('#candidateDashboard .nav-link').forEach(link => {
+        link.classList.remove('active');
+    });
+    
+    document.querySelectorAll('#candidateDashboard .tab-content').forEach(content => {
+        content.classList.add('hidden');
+    });
+    
+    document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+    document.getElementById(tabName).classList.remove('hidden');
+    
+    if (tabName === 'candidateJobs') {
+        loadJobs();
+    } else if (tabName === 'candidateApplications') {
+        loadApplications();
+    }
+}
+
+async function uploadResume() {
+    const fileInput = document.getElementById('resumeFile');
+    const file = fileInput.files[0];
+    
+    if (!file) return;
+    
+    const formData = new FormData();
+    formData.append('resume', file);
+    
+    try {
+        showAlert('info', 'Processing resume... Please wait.');
+        
+        const response = await fetch('/api/upload-resume', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            displaySkills(data.skills);
+            showAlert('success', data.message);
+        } else {
+            showAlert('danger', data.message);
+        }
+    } catch (error) {
+        showAlert('danger', 'Failed to upload resume');
+    }
+}
+
+function displaySkills(skills) {
+    document.getElementById('resumeUploadSection').classList.add('hidden');
+    document.getElementById('skillsSection').classList.remove('hidden');
+    
+    const skillsContainer = document.getElementById('candidateSkills');
+    skillsContainer.innerHTML = skills.map(skill => 
+        `<span class="skill-tag">${skill}</span>`
+    ).join('');
+}
+
+async function loadJobs() {
+    try {
+        const response = await fetch('/api/candidate/jobs');
+        const data = await response.json();
+        
+        if (data.success) {
+            displayJobs(data.jobs);
+        }
+    } catch (error) {
+        console.error('Failed to load jobs:', error);
+    }
+}
+
+function displayJobs(jobs) {
+    const container = document.getElementById('jobsList');
+    
+    if (jobs.length === 0) {
+        container.innerHTML = '<p class="text-muted">No jobs available at the moment.</p>';
+        return;
+    }
+    
+    container.innerHTML = jobs.map(job => `
+        <div class="job-card" onclick="viewJobDetails('${job._id}')">
+            <div class="job-header">
+                <div class="flex-grow-1">
+                    <div class="job-title">${job.title}</div>
+                    <div class="job-company">
+                        <i class="fas fa-building"></i> ${job.company || 'N/A'}
+                    </div>
+                    ${job.location ? `<div class="text-muted mt-1"><i class="fas fa-map-marker-alt"></i> ${job.location}</div>` : ''}
+                    ${job.salary ? `<div class="text-muted mt-1"><i class="fas fa-dollar-sign"></i> ${job.salary}</div>` : ''}
+                </div>
+                <div class="match-meter">
+                    <div class="match-circle" style="--match-percent: ${job.match_score}%;">
+                        <span class="match-value">${job.match_score}%</span>
+                    </div>
+                    <div class="match-label">Match</div>
+                </div>
+            </div>
+            
+            <div class="mt-3">
+                ${job.required_skills.slice(0, 5).map(skill => 
+                    `<span class="skill-tag">${skill}</span>`
+                ).join('')}
+                ${job.required_skills.length > 5 ? `<span class="skill-tag">+${job.required_skills.length - 5} more</span>` : ''}
+            </div>
+            
+            <div class="mt-3">
+                ${job.applied ? 
+                    `<span class="status-badge status-${job.application_status}">${job.application_status}</span>` :
+                    `<button class="btn btn-primary-custom" onclick="applyForJob(event, '${job._id}')">
+                        <i class="fas fa-paper-plane"></i> Apply Now
+                    </button>`
+                }
+            </div>
+        </div>
+    `).join('');
+}
+
+function viewJobDetails(jobId) {
+    fetch('/api/candidate/jobs')
+        .then(r => r.json())
+        .then(data => {
+            const job = data.jobs.find(j => j._id === jobId);
+            if (job) {
+                document.getElementById('jobDetailsTitle').textContent = job.title;
+                document.getElementById('jobDetailsBody').innerHTML = `
+                    <div class="mb-3">
+                        <strong><i class="fas fa-building"></i> Company:</strong> ${job.company || 'N/A'}
+                    </div>
+                    ${job.location ? `<div class="mb-3"><strong><i class="fas fa-map-marker-alt"></i> Location:</strong> ${job.location}</div>` : ''}
+                    ${job.salary ? `<div class="mb-3"><strong><i class="fas fa-dollar-sign"></i> Salary:</strong> ${job.salary}</div>` : ''}
+                    ${job.experience ? `<div class="mb-3"><strong><i class="fas fa-briefcase"></i> Experience:</strong> ${job.experience}</div>` : ''}
+                    
+                    <div class="mb-3">
+                        <strong>Match Score:</strong>
+                        <div class="progress-custom mt-2">
+                            <div class="progress-bar-custom" style="width: ${job.match_score}%"></div>
+                        </div>
+                        <small class="text-muted">${job.match_score}% match</small>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <strong>Description:</strong>
+                        <p class="mt-2">${job.description}</p>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <strong>Required Skills:</strong>
+                        <div class="mt-2">
+                            ${job.required_skills.map(skill => `<span class="skill-tag">${skill}</span>`).join('')}
+                        </div>
+                    </div>
+                    
+                    ${!job.applied ? 
+                        `<button class="btn btn-primary-custom btn-lg w-100" onclick="applyForJob(event, '${job._id}')">
+                            <i class="fas fa-paper-plane"></i> Apply for this Job
+                        </button>` :
+                        `<div class="alert alert-info">
+                            You have already applied for this position. Status: <strong>${job.application_status}</strong>
+                        </div>`
+                    }
+                `;
+                jobDetailsModal.show();
+            }
+        });
+}
+
+async function applyForJob(event, jobId) {
+    event.stopPropagation();
+    
+    if (!confirm('Are you sure you want to apply for this job?')) return;
+    
+    try {
+        const response = await fetch('/api/candidate/apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: jobId })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showAlert('success', data.message);
+            loadJobs();
+            jobDetailsModal.hide();
+        } else {
+            showAlert('danger', data.message);
+        }
+    } catch (error) {
+        showAlert('danger', 'Failed to apply for job');
+    }
+}
+
+async function loadApplications() {
+    try {
+        const response = await fetch('/api/candidate/applications');
+        const data = await response.json();
+        
+        if (data.success) {
+            displayApplications(data.applications);
+        }
+    } catch (error) {
+        console.error('Failed to load applications:', error);
+    }
+}
+
+function displayApplications(applications) {
+    const container = document.getElementById('applicationsList');
+    
+    if (applications.length === 0) {
+        container.innerHTML = '<p class="text-muted">You haven\'t applied to any jobs yet.</p>';
+        return;
+    }
+    
+    container.innerHTML = applications.map(app => `
+        <div class="applicant-row">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <h5>${app.job_title}</h5>
+                    <small class="text-muted">Applied: ${new Date(app.applied_at).toLocaleDateString()}</small>
+                </div>
+                <span class="status-badge status-${app.status}">${app.status}</span>
+            </div>
+            
+            <div class="mb-2">
+                <strong>Match Score:</strong>
+                <div class="progress-custom mt-1">
+                    <div class="progress-bar-custom" style="width: ${app.match_score}%"></div>
+                </div>
+                <small class="text-muted">${app.match_score}%</small>
+            </div>
+            
+            ${app.assessment_completed ? 
+                `<div class="mb-2">
+                    <strong>Assessment Score:</strong> ${app.assessment_score}%
+                </div>` : 
+                app.status === 'shortlisted' ? 
+                `<button class="btn btn-primary-custom mt-2" onclick="startAssessment('${app._id}')">
+                    <i class="fas fa-clipboard-check"></i> Take Assessment
+                </button>` : ''
+            }
+        </div>
+    `).join('');
+}
+
+async function startAssessment(applicationId) {
+    try {
+        const response = await fetch(`/api/candidate/assessment/${applicationId}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            currentAssessment = {
+                applicationId: applicationId,
+                questions: data.assessment.questions,
+                answers: {}
+            };
+            
+            displayAssessment(data.assessment);
+            startTimer(data.assessment.time_limit * 60);
+            assessmentModal.show();
+        } else {
+            showAlert('danger', data.message);
+        }
+    } catch (error) {
+        showAlert('danger', 'Failed to load assessment');
+    }
+}
+
+function displayAssessment(assessment) {
+    const container = document.getElementById('assessmentQuestions');
+    
+    container.innerHTML = assessment.questions.map((q, index) => `
+        <div class="question-card">
+            <div class="question-text">
+                <span class="question-number">${q.id}</span>
+                ${q.question}
+            </div>
+            <div class="options">
+                ${q.options.map((option, i) => `
+                    <label class="option-item" onclick="selectOption(${q.id}, ${i})">
+                        <input type="radio" name="question_${q.id}" value="${i}">
+                        <span>${option}</span>
+                    </label>
+                `).join('')}
+            </div>
+        </div>
+    `).join('');
+}
+
+function selectOption(questionId, optionIndex) {
+    const radioInputs = document.getElementsByName(`question_${questionId}`);
+    radioInputs[optionIndex].checked = true;
+    
+    document.querySelectorAll(`input[name="question_${questionId}"]`).forEach((input, i) => {
+        input.parentElement.classList.toggle('selected', i === optionIndex);
+    });
+    
+    currentAssessment.answers[questionId] = optionIndex;
+}
+
+function startTimer(seconds) {
+    let timeLeft = seconds;
+    const timerElement = document.getElementById('timeRemaining');
+    const timerDisplay = document.getElementById('timerDisplay');
+    
+    assessmentTimer = setInterval(() => {
+        timeLeft--;
+        
+        const minutes = Math.floor(timeLeft / 60);
+        const secs = timeLeft % 60;
+        timerElement.textContent = `${minutes}:${secs.toString().padStart(2, '0')}`;
+        
+        if (timeLeft <= 60) {
+            timerDisplay.classList.add('timer-warning');
+        }
+        
+        if (timeLeft <= 0) {
+            clearInterval(assessmentTimer);
+            submitAssessment();
+        }
+    }, 1000);
+}
+
+async function submitAssessment() {
+    if (assessmentTimer) {
+        clearInterval(assessmentTimer);
+    }
+    
+    const totalQuestions = currentAssessment.questions.length;
+    const answeredQuestions = Object.keys(currentAssessment.answers).length;
+    
+    if (answeredQuestions < totalQuestions) {
+        if (!confirm(`You have answered ${answeredQuestions} out of ${totalQuestions} questions. Submit anyway?`)) {
+            return;
+        }
+    }
+    
+    try {
+        const response = await fetch('/api/candidate/submit-assessment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                application_id: currentAssessment.applicationId,
+                answers: currentAssessment.answers
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            assessmentModal.hide();
+            showAlert(data.passed ? 'success' : 'warning', 
+                `Assessment submitted! Your score: ${data.score}%. ${data.passed ? 'Congratulations, you passed!' : 'Unfortunately, you did not pass this time.'}`
+            );
+            loadApplications();
+        } else {
+            showAlert('danger', data.message);
+        }
+    } catch (error) {
+        showAlert('danger', 'Failed to submit assessment');
+    }
+}
+
+async function initRecruiterDashboard() {
+    document.getElementById('recruiterName').textContent = currentUser.name;
+    document.getElementById('recruiterAvatar').textContent = currentUser.name.charAt(0).toUpperCase();
+    
+    switchRecruiterTab('recruiterJobs');
+    loadNotifications();
+}
+
+function switchRecruiterTab(tabName) {
+    document.querySelectorAll('#recruiterDashboard .nav-link').forEach(link => {
+        link.classList.remove('active');
+    });
+    
+    document.querySelectorAll('#recruiterDashboard .tab-content').forEach(content => {
+        content.classList.add('hidden');
+    });
+    
+    document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+    document.getElementById(tabName).classList.remove('hidden');
+    
+    if (tabName === 'recruiterJobs') {
+        loadRecruiterJobs();
+    } else if (tabName === 'recruiterNotifications') {
+        loadNotifications();
+    }
+}
+
+async function loadRecruiterJobs() {
+    try {
+        const response = await fetch('/api/recruiter/jobs');
+        const data = await response.json();
+        
+        if (data.success) {
+            displayRecruiterJobs(data.jobs);
+        }
+    } catch (error) {
+        console.error('Failed to load jobs:', error);
+    }
+}
+
+function displayRecruiterJobs(jobs) {
+    const container = document.getElementById('recruiterJobsList');
+    
+    if (jobs.length === 0) {
+        container.innerHTML = '<p class="text-muted">You haven\'t posted any jobs yet. Click "Post Job" to get started.</p>';
+        return;
+    }
+    
+    container.innerHTML = jobs.map(job => `
+        <div class="job-card">
+            <div class="job-header">
+                <div class="flex-grow-1">
+                    <div class="job-title">${job.title}</div>
+                    <div class="job-company">
+                        <i class="fas fa-building"></i> ${job.company || 'N/A'}
+                    </div>
+                    <small class="text-muted">Posted: ${new Date(job.created_at).toLocaleDateString()}</small>
+                </div>
+            </div>
+            
+            <div class="mt-3">
+                <div class="row text-center">
+                    <div class="col-4">
+                        <strong>${job.total_applications}</strong>
+                        <div class="text-muted small">Applications</div>
+                    </div>
+                    <div class="col-4">
+                        <strong>${job.hired_count}</strong>
+                        <div class="text-muted small">Hired</div>
+                    </div>
+                    <div class="col-4">
+                        <strong>${job.rejected_count}</strong>
+                        <div class="text-muted small">Rejected</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mt-3">
+                <button class="btn btn-primary-custom" onclick="viewApplicants('${job._id}', '${job.title}')">
+                    <i class="fas fa-users"></i> View Applicants
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function postJob(event) {
+    event.preventDefault();
+    
+    const skillsInput = document.getElementById('jobSkills').value;
+    const skills = skillsInput.split(',').map(s => s.trim()).filter(s => s);
+    
+    const jobData = {
+        title: document.getElementById('jobTitle').value,
+        company: document.getElementById('jobCompany').value,
+        description: document.getElementById('jobDescription').value,
+        required_skills: skills,
+        experience: document.getElementById('jobExperience').value,
+        salary: document.getElementById('jobSalary').value,
+        location: document.getElementById('jobLocation').value
+    };
+    
+    try {
+        const response = await fetch('/api/recruiter/post-job', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(jobData)
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showAlert('success', data.message);
+            document.getElementById('postJobForm').reset();
+            switchRecruiterTab('recruiterJobs');
+        } else {
+            showAlert('danger', data.message);
+        }
+    } catch (error) {
+        showAlert('danger', 'Failed to post job');
+    }
+}
+
+async function viewApplicants(jobId, jobTitle) {
+    try {
+        const response = await fetch(`/api/recruiter/applications/${jobId}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            document.getElementById('applicantsModalTitle').textContent = `Applicants for ${jobTitle}`;
+            displayApplicants(data.applications);
+            applicantsModal.show();
+        }
+    } catch (error) {
+        showAlert('danger', 'Failed to load applicants');
+    }
+}
+
+function displayApplicants(applicants) {
+    const container = document.getElementById('applicantsModalBody');
+    
+    if (applicants.length === 0) {
+        container.innerHTML = '<p class="text-muted">No applications yet.</p>';
+        return;
+    }
+    
+    container.innerHTML = applicants.map(app => `
+        <div class="applicant-row">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <h5>${app.candidate_name}</h5>
+                    <small class="text-muted">${app.candidate_email}</small>
+                </div>
+                <span class="status-badge status-${app.status}">${app.status}</span>
+            </div>
+            
+            <div class="mb-2">
+                <strong>Match Score:</strong>
+                <div class="progress-custom mt-1">
+                    <div class="progress-bar-custom" style="width: ${app.match_score}%"></div>
+                </div>
+                <small class="text-muted">${app.match_score}%</small>
+            </div>
+            
+            ${app.assessment_completed ? 
+                `<div class="mb-2">
+                    <strong>Assessment Score:</strong> ${app.assessment_score}%
+                </div>` : ''
+            }
+            
+            <div class="mb-3">
+                <strong>Skills:</strong>
+                <div class="mt-1">
+                    ${app.candidate_skills.slice(0, 8).map(skill => 
+                        `<span class="skill-tag">${skill}</span>`
+                    ).join('')}
+                </div>
+            </div>
+            
+            <div class="d-flex gap-2">
+                ${app.status !== 'hired' && app.status !== 'rejected' ? 
+                    `<button class="btn btn-outline-custom" onclick="updateApplicationStatus('${app._id}', 'shortlisted')">
+                        <i class="fas fa-check"></i> Shortlist
+                    </button>
+                    <button class="btn btn-outline-custom" onclick="updateApplicationStatus('${app._id}', 'rejected')">
+                        <i class="fas fa-times"></i> Reject
+                    </button>` : ''
+                }
+                ${app.status === 'selected' || app.status === 'shortlisted' ? 
+                    `<button class="btn btn-primary-custom" onclick="updateApplicationStatus('${app._id}', 'hired')">
+                        <i class="fas fa-user-check"></i> Hire
+                    </button>` : ''
+                }
+            </div>
+        </div>
+    `).join('');
+}
+
+async function updateApplicationStatus(applicationId, status) {
+    if (!confirm(`Are you sure you want to ${status} this candidate?`)) return;
+    
+    try {
+        const response = await fetch('/api/recruiter/update-application', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ application_id: applicationId, status })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showAlert('success', data.message);
+            applicantsModal.hide();
+            loadRecruiterJobs();
+        } else {
+            showAlert('danger', data.message);
+        }
+    } catch (error) {
+        showAlert('danger', 'Failed to update application status');
+    }
+}
+
+async function loadNotifications() {
+    try {
+        const response = await fetch('/api/recruiter/notifications');
+        const data = await response.json();
+        
+        if (data.success) {
+            displayNotifications(data.notifications);
+            updateNotificationBadge(data.notifications.filter(n => !n.read).length);
+        }
+    } catch (error) {
+        console.error('Failed to load notifications:', error);
+    }
+}
+
+function displayNotifications(notifications) {
+    const container = document.getElementById('notificationsList');
+    
+    if (notifications.length === 0) {
+        container.innerHTML = '<p class="text-muted">No notifications yet.</p>';
+        return;
+    }
+    
+    container.innerHTML = notifications.map(notif => `
+        <div class="notification-item ${!notif.read ? 'unread' : ''}" 
+             onclick="markNotificationRead('${notif._id}')">
+            <div class="d-flex justify-content-between">
+                <div>
+                    <i class="fas fa-${notif.type === 'success' ? 'check-circle text-success' : 'info-circle text-info'}"></i>
+                    ${notif.message}
+                </div>
+                <small class="text-muted">${new Date(notif.created_at).toLocaleString()}</small>
+            </div>
+        </div>
+    `).join('');
+}
+
+function updateNotificationBadge(count) {
+    const badge = document.getElementById('notificationBadge');
+    badge.textContent = count;
+    badge.style.display = count > 0 ? 'flex' : 'none';
+}
+
+async function markNotificationRead(notificationId) {
+    try {
+        await fetch('/api/recruiter/mark-notification-read', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notification_id: notificationId })
+        });
+        loadNotifications();
+    } catch (error) {
+        console.error('Failed to mark notification as read:', error);
+    }
+}
+
+function showAlert(type, message) {
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+    alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px; animation: slideIn 0.3s ease;';
+    alertDiv.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    document.body.appendChild(alertDiv);
+    
+    setTimeout(() => {
+        alertDiv.remove();
+    }, 5000);
+}
+</script>
+</body>
+</html>
