@@ -45,6 +45,10 @@ try:
 except Exception as e:
     print(f"Warning: Could not create upload directory: {e}")
 
+# Global error tracking for debugging
+db_connection_error = None
+latest_error = None
+
 # MongoDB Configuration
 MONGO_URI = os.getenv('MONGO_URI')
 
@@ -67,10 +71,10 @@ try:
     
     # Add SSL/TLS parameters only for MongoDB Atlas connections
     if MONGO_URI and ('mongodb+srv://' in MONGO_URI or 'mongodb.net' in MONGO_URI):
+        # certifi.where() is the most reliable way to get CA certs in serverless
         connection_params.update({
             'tls': True,
             'tlsCAFile': certifi.where(),
-            'tlsAllowInvalidCertificates': True,
         })
     
     client = MongoClient(MONGO_URI, **connection_params)
@@ -100,8 +104,9 @@ except Exception as e:
         except:
             masked_uri = "REDACTED"
             
-    print(f"\n⚠ MongoDB Connection Error: {str(e)}")
+    print(f"\n⚠ MongoDB Connection Fatal Error: {str(e)}")
     print(f"Attempted URI: {masked_uri}")
+    db_connection_error = str(e)
     
     # Try local connection as fallback
     try:
@@ -1252,8 +1257,16 @@ def register():
             }
         })
     except Exception as e:
-        print(f"Registration error: {str(e)}")
-        return jsonify({'success': False, 'message': 'Database connection error. Please check if MongoDB is running.'}), 500
+        error_msg = str(e)
+        print(f"Registration error: {error_msg}")
+        # Provide a more helpful error for common Atlas issues
+        if "Authentication failed" in error_msg:
+            friendly_msg = "Database authentication failed. Please check your username and password."
+        elif "timeout" in error_msg.lower():
+            friendly_msg = "Database connection timed out. Please check your Network Access (IP whitelist) in Atlas."
+        else:
+            friendly_msg = f"Database error: {error_msg}"
+        return jsonify({'success': False, 'message': friendly_msg}), 500
 
 @app.route('/api/login', methods=['POST'])
 def login():
@@ -1290,8 +1303,15 @@ def login():
             }
         })
     except Exception as e:
-        print(f"Login error: {str(e)}")
-        return jsonify({'success': False, 'message': 'Database connection error. Please check if MongoDB is running.'}), 500
+        error_msg = str(e)
+        print(f"Login error: {error_msg}")
+        if "Authentication failed" in error_msg:
+            friendly_msg = "Database authentication failed. Please check your username and password."
+        elif "timeout" in error_msg.lower():
+            friendly_msg = "Database connection timed out. Please check your Network Access (IP whitelist) in Atlas."
+        else:
+            friendly_msg = f"Database error: {error_msg}"
+        return jsonify({'success': False, 'message': friendly_msg}), 500
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
@@ -1974,6 +1994,7 @@ def mark_notification_read():
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
     try:
+        global latest_error
         # These calls will trigger a connection attempt if it hasn't happened yet
         total_jobs = jobs_collection.count_documents({'status': 'active'})
         total_candidates = users_collection.count_documents({'role': 'candidate'})
@@ -1981,12 +2002,14 @@ def get_stats():
         companies = jobs_collection.distinct('company')
         is_connected = True
     except Exception as e:
-        print(f"Stats fetch error: {e}")
+        error_msg = str(e)
+        print(f"Stats fetch error: {error_msg}")
         total_jobs = 0
         total_candidates = 0
         total_applications = 0
         companies = []
         is_connected = False
+        latest_error = error_msg
     
     mongo_env_set = os.environ.get('MONGO_URI') is not None
     
@@ -1998,7 +2021,8 @@ def get_stats():
             'total_applications': total_applications,
             'total_companies': len([c for c in companies if c]),
             'database_connected': is_connected,
-            'mongo_uri_set': mongo_env_set
+            'mongo_uri_set': mongo_env_set,
+            'error_hint': latest_error if not is_connected else None
         }
     })
 
