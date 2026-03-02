@@ -54,19 +54,7 @@ if not MONGO_URI:
     MONGO_URI = 'mongodb://localhost:27017/resume_ats'
     print(f"📍 Falling back to local MongoDB: {MONGO_URI}\n")
 
-# Ensure the URI includes the database name if it's a root string
-if MONGO_URI and 'mongodb+srv://' in MONGO_URI:
-    # A safer way to check and append database name
-    if '.net' in MONGO_URI:
-        parts = MONGO_URI.split('.net')
-        after_net = parts[1] if len(parts) > 1 else ""
-        
-        if not after_net or after_net == '/':
-            MONGO_URI = parts[0] + '.net/resume_ats' + (after_net if after_net == '/' else "")
-        elif after_net.startswith('/?'):
-            MONGO_URI = parts[0] + '.net/resume_ats' + after_net[1:]
-        elif after_net.startswith('?'):
-             MONGO_URI = parts[0] + '.net/resume_ats' + after_net
+# MongoDB URI handling moved to explicit database selection for reliability
 
 try:
     # Enhanced connection parameters to resolve SSL issues
@@ -87,8 +75,8 @@ try:
     
     client = MongoClient(MONGO_URI, **connection_params)
     
-    # Do NOT ping in global scope on Vercel as it can cause timeouts/crashes
-    db = client.get_database()
+    # Explicitly select the database name for consistency across environments
+    db = client.get_database('resume_ats')
     
     # Collections
     users_collection = db.users
@@ -100,8 +88,20 @@ try:
     print(f"✅ MongoDB Connected Successfully to: {db.name}\n")
     
 except Exception as e:
+    # Masked URI for safe logging in Vercel
+    masked_uri = "NOT_SET"
+    if MONGO_URI:
+        try:
+            parts = MONGO_URI.split('@')
+            if len(parts) > 1:
+                masked_uri = "mongodb+srv://****:****@" + parts[1]
+            else:
+                masked_uri = MONGO_URI[:20] + "..."
+        except:
+            masked_uri = "REDACTED"
+            
     print(f"\n⚠ MongoDB Connection Error: {str(e)}")
-    print(f"Attempted URI: {MONGO_URI.split(':', 1)[0]}:****@****") # Secure logging
+    print(f"Attempted URI: {masked_uri}")
     
     # Try local connection as fallback
     try:
@@ -124,6 +124,7 @@ except Exception as e:
         
         # Create mock collections for development
         class MockCollection:
+            is_mock = True
             def find_one(self, *args, **kwargs):
                 return None
             def find(self, *args, **kwargs):
@@ -1216,10 +1217,8 @@ def register():
     if not email or not password or not name:
         return jsonify({'success': False, 'message': 'All fields are required'}), 400
     
-    if role not in ['candidate', 'recruiter']:
-        return jsonify({'success': False, 'message': 'Invalid role'}), 400
-    
     try:
+        # Check if email exists - this is where it might fail if DB is down
         if users_collection.find_one({'email': email}):
             return jsonify({'success': False, 'message': 'Email already registered. Please login instead.'}), 400
         
@@ -1974,13 +1973,21 @@ def mark_notification_read():
 
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
-    total_jobs = jobs_collection.count_documents({'status': 'active'})
-    total_candidates = users_collection.count_documents({'role': 'candidate'})
-    total_applications = applications_collection.count_documents({})
-    companies = jobs_collection.distinct('company')
+    try:
+        # These calls will trigger a connection attempt if it hasn't happened yet
+        total_jobs = jobs_collection.count_documents({'status': 'active'})
+        total_candidates = users_collection.count_documents({'role': 'candidate'})
+        total_applications = applications_collection.count_documents({})
+        companies = jobs_collection.distinct('company')
+        is_connected = True
+    except Exception as e:
+        print(f"Stats fetch error: {e}")
+        total_jobs = 0
+        total_candidates = 0
+        total_applications = 0
+        companies = []
+        is_connected = False
     
-    # Check if we are connected to a real MongoDB
-    is_connected = db is not None
     mongo_env_set = os.environ.get('MONGO_URI') is not None
     
     return jsonify({
