@@ -6,26 +6,54 @@
             "use": "@vercel/python"
         }
     ],
-    "routes": [
+    "rewrites": [
         {
-            "src": "/static/(.*)",
-            "dest": "/static/$1"
+            "source": "/static/(.*)",
+            "destination": "/static/$1"
         },
         {
-            "src": "/manifest.json",
-            "dest": "/static/manifest.json"
+            "source": "/manifest.json",
+            "destination": "/static/manifest.json"
         },
         {
-            "src": "/sw.js",
-            "dest": "/static/sw.js",
-            "headers": {
-                "Service-Worker-Allowed": "/",
-                "Cache-Control": "no-cache, no-store, must-revalidate"
-            }
+            "source": "/sw.js",
+            "destination": "/static/sw.js"
         },
         {
-            "src": "/(.*)",
-            "dest": "app.py"
+            "source": "/(.*)",
+            "destination": "app.py"
+        }
+    ],
+    "headers": [
+        {
+            "source": "/sw.js",
+            "headers": [
+                {
+                    "key": "Service-Worker-Allowed",
+                    "value": "/"
+                },
+                {
+                    "key": "Cache-Control",
+                    "value": "no-cache, no-store, must-revalidate"
+                },
+                {
+                    "key": "Content-Type",
+                    "value": "application/javascript"
+                }
+            ]
+        },
+        {
+            "source": "/manifest.json",
+            "headers": [
+                {
+                    "key": "Content-Type",
+                    "value": "application/manifest+json"
+                },
+                {
+                    "key": "Cache-Control",
+                    "value": "public, max-age=0, must-revalidate"
+                }
+            ]
         }
     ]
 }
