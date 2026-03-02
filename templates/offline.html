@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline - Resume AI</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-navy: #1a2332;
+            --secondary-navy: #2d3e50;
+            --accent-teal: #17a2b8;
+        }
+
+        body {
+            background: linear-gradient(135deg, var(--primary-navy) 0%, var(--secondary-navy) 100%);
+            color: white;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        .offline-container {
+            padding: 2rem;
+            max-width: 500px;
+        }
+
+        .offline-icon {
+            font-size: 5rem;
+            color: var(--accent-teal);
+            margin-bottom: 2rem;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+                opacity: 0.8;
+            }
+
+            50% {
+                transform: scale(1.1);
+                opacity: 1;
+            }
+
+            100% {
+                transform: scale(1);
+                opacity: 0.8;
+            }
+        }
+
+        .btn-retry {
+            background: var(--accent-teal);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-weight: 600;
+            margin-top: 2rem;
+            transition: all 0.3s ease;
+        }
+
+        .btn-retry:hover {
+            background: #138496;
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="offline-container">
+        <i class="fas fa-wifi-slash offline-icon"></i>
+        <h1>You're Offline</h1>
+        <p class="lead">Check your internet connection and try again. Some features of Resume AI may not be available
+            while you are offline.</p>
+        <button class="btn btn-retry" onclick="window.location.reload()">
+            <i class="fas fa-sync-alt"></i> Try Again
+        </button>
+    </div>
+</body>
+
+</html>

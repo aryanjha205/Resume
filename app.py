@@ -40,6 +40,10 @@ def serve_manifest():
 def serve_sw():
     return send_from_directory('static', 'sw.js')
 
+@app.route('/offline')
+def serve_offline():
+    return render_template('offline.html')
+
 try:
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 except Exception as e:
